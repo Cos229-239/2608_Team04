@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Generated publication binaries: never diff/merge/normalize as text.
+# Without this, git's `* text=auto` heuristic can still hand PDF/DOCX
+# content to the text diff/whitespace-check path, producing thousands of
+# spurious "trailing whitespace" findings from `git diff --check`.
+*.pdf binary
+*.docx binary
