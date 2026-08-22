@@ -43,7 +43,15 @@ def _primitive(value: object) -> Any:
         return [_primitive(item) for item in value]
     if isinstance(value, Path):
         return str(value)
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        # QVariant exposes Python integers to QML as signed 64-bit values.
+        # Windows file identities are unsigned and may exceed that range;
+        # preserve their exact display value as text instead of allowing the
+        # entire state-map conversion to overflow and disappear from the UI.
+        return value if -(2**63) <= value <= (2**63 - 1) else str(value)
+    if value is None or isinstance(value, (str, float)):
         return value
     return str(value)
 

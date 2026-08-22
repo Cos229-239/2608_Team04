@@ -63,6 +63,10 @@ class AuthorityAttemptReservation(Protocol):
 
     def reserve(self, prepared: PreparedAuthorityReservation) -> None: ...
 
+    def observe(
+        self, prepared: PreparedAuthorityReservation
+    ) -> dict[str, Any]: ...
+
 
 class UnavailableAuthorityAttemptReservation:
     def prepare(
@@ -95,6 +99,14 @@ class UnavailableAuthorityAttemptReservation:
         del prepared
         raise PermissionError(
             "Authority attempt reservation is not configured"
+        )
+
+    def observe(
+        self, prepared: PreparedAuthorityReservation
+    ) -> dict[str, Any]:
+        del prepared
+        raise PermissionError(
+            "Authority attempt reservation observation is not configured"
         )
 
 
@@ -208,6 +220,27 @@ class TestAuthorityAttemptReservation:
             prepared.authority_attempt_id,
         )
         self.reserve_calls += 1
+
+    def observe(
+        self, prepared: PreparedAuthorityReservation
+    ) -> dict[str, Any]:
+        if prepared.composition_identity != "TEST_AUTHORITY":
+            raise PermissionError("test Authority observation plan is invalid")
+        registered = (
+            prepared.authority_attempt_id
+            in self._launch_authority._authorizations
+        )
+        return {
+            "found": registered,
+            "record": (
+                {"id": prepared.authority_attempt_id}
+                if registered
+                else None
+            ),
+            "service_key_id": "test-authority-key",
+            "service_key_version": 1,
+            "client_sid": "S-1-0-0",
+        }
 
 
 class ProductionAuthorityAttemptReservation:
@@ -387,6 +420,27 @@ class ProductionAuthorityAttemptReservation:
                 "production Authority reservation digest changed"
             )
         self.__gateway.reserve(prepared.plan)
+
+    def observe(
+        self, prepared: PreparedAuthorityReservation
+    ) -> dict[str, Any]:
+        if (
+            type(prepared.plan) is not AuthorityExecutionPlan
+            or prepared.composition_identity != "PRODUCTION_AUTHORITY"
+        ):
+            raise PermissionError(
+                "production Authority observation plan is invalid"
+            )
+        state = self.__gateway.query_attempt(
+            prepared.authority_attempt_id
+        )
+        identity = self.__gateway.authority_identity()
+        return {
+            **state,
+            "service_key_id": identity.get("service_key_id"),
+            "service_key_version": identity.get("service_key_version"),
+            "client_sid": identity.get("client_sid"),
+        }
 
 
 def _validate_prepared_binding(

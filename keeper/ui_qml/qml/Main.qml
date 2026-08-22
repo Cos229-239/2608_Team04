@@ -158,6 +158,7 @@ ApplicationWindow {
         default property alias content: body.data
         color: panel
         radius: 7
+        clip: true
         border.width: 1
         border.color: border
         implicitHeight: body.implicitHeight + 32
@@ -166,6 +167,78 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.margins: 16
             spacing: 12
+        }
+    }
+
+    component TrustItem: ColumnLayout {
+        property string label: ""
+        property string detail: ""
+        spacing: 2
+        Text {
+            text: parent.label
+            color: goldBright
+            font.pixelSize: 10
+            font.weight: Font.Bold
+            font.letterSpacing: 0.45
+        }
+        Text {
+            text: parent.detail
+            color: textPrimary
+            font.pixelSize: 10
+        }
+    }
+
+    component MetricCard: Rectangle {
+        property string label: ""
+        property string value: "0"
+        property string route: "Overview"
+        Layout.fillWidth: true
+        Layout.preferredHeight: 108
+        radius: 7
+        color: metricMouse.containsMouse ? "#1C1F1E" : panel
+        border.width: 1
+        border.color: metricMouse.containsMouse ? goldDim : border
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 4
+            radius: 2
+            color: gold
+        }
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 20
+            anchors.rightMargin: 16
+            anchors.topMargin: 14
+            anchors.bottomMargin: 14
+            spacing: 5
+            Text {
+                text: parent.parent.label.toUpperCase()
+                color: goldBright
+                font.pixelSize: 11
+                font.weight: Font.Bold
+                font.letterSpacing: 0.55
+            }
+            Text {
+                text: parent.parent.value
+                color: textPrimary
+                font.pixelSize: 32
+                font.weight: Font.DemiBold
+            }
+            Text {
+                text: "Open " + parent.parent.label.toLowerCase() + "  →"
+                color: textMuted
+                font.pixelSize: 10
+            }
+        }
+        MouseArea {
+            id: metricMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: keeper.navigate(parent.route)
         }
     }
 
@@ -251,9 +324,9 @@ ApplicationWindow {
             anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: 16
             Rectangle { width: 4; height: 34; radius: 2; color: statusColor(parent.parent.state) }
             ColumnLayout {
-                Layout.fillWidth: true; spacing: 3
-                BodyText { text: parent.parent.parent.title; font.weight: Font.DemiBold }
-                MutedText { text: parent.parent.parent.subtitle; elide: Text.ElideRight; Layout.fillWidth: true }
+                Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 3
+                BodyText { Layout.fillWidth: true; text: parent.parent.parent.title; font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 }
+                MutedText { Layout.fillWidth: true; text: parent.parent.parent.subtitle; elide: Text.ElideRight; maximumLineCount: 1 }
             }
             StatusPill { visible: parent.parent.state.length > 0; value: parent.parent.state }
         }
@@ -286,12 +359,12 @@ ApplicationWindow {
                 Image {
                     Layout.alignment: Qt.AlignHCenter
                     source: keeperIcon
-                    sourceSize.width: 130; sourceSize.height: 130
+                    sourceSize.width: 108; sourceSize.height: 108
                     fillMode: Image.PreserveAspectFit
-                    Layout.preferredWidth: 140; Layout.preferredHeight: 140
+                    Layout.preferredWidth: 118; Layout.preferredHeight: 118
                 }
-                Text { Layout.alignment: Qt.AlignHCenter; text: "K E E P E R"; color: goldBright; font.family: "Georgia"; font.pixelSize: 22; font.weight: Font.DemiBold }
-                MutedText { Layout.alignment: Qt.AlignHCenter; text: "EXECUTIVE CONTROL CENTER"; font.pixelSize: 9; color: gold }
+                Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "KEEPER"; color: goldBright; font.family: "Georgia"; font.pixelSize: 22; font.weight: Font.DemiBold; font.letterSpacing: 2; clip: true }
+                MutedText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "EXECUTIVE CONTROL CENTER"; font.pixelSize: 8; color: gold; elide: Text.ElideRight; clip: true }
                 Rectangle { Layout.fillWidth: true; height: 1; color: border; Layout.topMargin: 8; Layout.bottomMargin: 4 }
                 ScrollView {
                     Layout.fillWidth: true; Layout.fillHeight: true
@@ -336,16 +409,28 @@ ApplicationWindow {
             spacing: 0
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 72
+                Layout.preferredHeight: 78
                 color: "#0D0F0E"
                 border.color: "#292B29"
                 RowLayout {
                     anchors.fill: parent; anchors.leftMargin: 24; anchors.rightMargin: 24
-                    Text { text: keeper.currentPage; color: textPrimary; font.pixelSize: 20; font.weight: Font.DemiBold }
+                    ColumnLayout {
+                        spacing: 1
+                        Text { text: keeper.currentPage; color: textPrimary; font.pixelSize: 19; font.weight: Font.DemiBold }
+                        MutedText { text: "Founder-governed local workspace"; font.pixelSize: 10 }
+                    }
                     Item { Layout.fillWidth: true }
+                    RowLayout {
+                        visible: window.width >= 1430
+                        spacing: 22
+                        TrustItem { label: "FOUNDER FIRST"; detail: "Explicit authority" }
+                        TrustItem { label: "AUTHORITY READY"; detail: "Every action verified" }
+                        TrustItem { label: "AUDIT & RECEIPTS"; detail: "Nothing hidden" }
+                    }
+                    Rectangle { visible: window.width >= 1430; width: 1; height: 34; color: border }
                     TextField {
                         objectName: "globalSearch"
-                        Layout.preferredWidth: window.width >= 1400 ? 390 : 220
+                        Layout.preferredWidth: window.width >= 1500 ? 300 : 220
                         Layout.minimumWidth: 160
                         placeholderText: "Search projects, workflows, evidence…"
                         color: textPrimary
@@ -358,7 +443,7 @@ ApplicationWindow {
                     ColumnLayout {
                         spacing: 0
                         BodyText { text: "Founder"; font.weight: Font.DemiBold; font.pixelSize: 13 }
-                        MutedText { text: text(keeper.state.project ? keeper.state.project.title : "", "No active project"); font.pixelSize: 10 }
+                        MutedText { text: "Local session"; font.pixelSize: 10 }
                     }
                 }
             }
@@ -377,8 +462,56 @@ ApplicationWindow {
                         contentWidth: width; contentHeight: overviewColumn.implicitHeight + 48; clip: true
                         ColumnLayout {
                             id: overviewColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
-                            PageHeader { title: "Overview"; subtitle: "Durable project, workflow, provider, and safety state at a glance."; actionText: "+ Describe a Project"; onAction: { window.openAssistant(); keeper.navigate("Overview") } }
-                            RowLayout { Layout.fillWidth: true; BodyText { text: "Active project" } ComboBox { id: projectSelector; Layout.preferredWidth: 330; model: keeper.state.project ? keeper.state.project.catalog || [] : []; textRole: "title"; valueRole: "project_id"; onActivated: keeper.selectProject(currentValue); contentItem: Text { leftPadding: 12; text: projectSelector.displayText || "No active Keeper project"; color: textPrimary; verticalAlignment: Text.AlignVCenter } background: Rectangle { color: "#101212"; border.color: projectSelector.activeFocus ? gold : "#393B3A"; radius: 4 } } QuietButton { text: "+ New Task"; enabled: (keeper.state.projects || []).length > 0; onClicked: taskDialog.open() } Item { Layout.fillWidth: true } }
+                            PageHeader { title: "Overview"; subtitle: "Projects, work, and verified safety state at a glance."; actionText: "+ Describe a Project"; onAction: { window.openAssistant(); keeper.navigate("Overview") } }
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 112
+                                radius: 8
+                                color: "#151817"
+                                border.width: 1
+                                border.color: goldDim
+                                Rectangle { anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 5; radius: 2; color: gold }
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 24
+                                    anchors.rightMargin: 22
+                                    anchors.topMargin: 18
+                                    anchors.bottomMargin: 18
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: "Welcome, Founder"
+                                            color: textPrimary
+                                            font.pixelSize: 22
+                                            font.weight: Font.DemiBold
+                                        }
+                                        MutedText {
+                                            Layout.fillWidth: true
+                                            text: window.text(keeper.state.project ? keeper.state.project.title : "", "No active Keeper project")
+                                            elide: Text.ElideMiddle
+                                            maximumLineCount: 2
+                                            font.pixelSize: 13
+                                        }
+                                        RowLayout {
+                                            spacing: 8
+                                            Rectangle { width: 8; height: 8; radius: 4; color: statusColor(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "UNAVAILABLE") }
+                                            Text { text: "KeeperAuthority " + window.text(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "", "UNAVAILABLE").toUpperCase(); color: statusColor(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "UNAVAILABLE"); font.pixelSize: 11; font.weight: Font.DemiBold }
+                                            Text { text: "•"; color: textMuted; font.pixelSize: 11 }
+                                            MutedText { text: (keeper.state.counts ? keeper.state.counts.uncertain : 0) + " uncertain outcome(s) preserved"; font.pixelSize: 11 }
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        visible: window.width >= 1300
+                                        Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
+                                        spacing: 3
+                                        SectionTitle { text: "FOUNDER MODE" }
+                                        MutedText { text: "Authority is never delegated by the UI"; horizontalAlignment: Text.AlignRight }
+                                    }
+                                }
+                            }
+                            RowLayout { Layout.fillWidth: true; BodyText { text: "Active project" } ComboBox { id: projectSelector; Layout.fillWidth: true; Layout.minimumWidth: 180; Layout.maximumWidth: 520; model: keeper.state.project ? keeper.state.project.catalog || [] : []; textRole: "title"; valueRole: "project_id"; onActivated: keeper.selectProject(currentValue); contentItem: Text { leftPadding: 12; rightPadding: 12; text: projectSelector.displayText || "No active Keeper project"; color: textPrimary; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle; clip: true } background: Rectangle { color: "#101212"; border.color: projectSelector.activeFocus ? gold : "#393B3A"; radius: 4 } } QuietButton { text: "+ New Task"; enabled: (keeper.state.projects || []).length > 0; onClicked: taskDialog.open() } Item { Layout.fillWidth: true } }
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 12
                                 Repeater {
@@ -388,35 +521,38 @@ ApplicationWindow {
                                         ["Approvals", keeper.state.counts ? keeper.state.counts.approvals : 0, "Authorizations"],
                                         ["Providers", keeper.state.counts ? keeper.state.counts.providers : 0, "Providers"]
                                     ]
-                                    KPanel {
-                                        Layout.fillWidth: true; Layout.preferredHeight: 112
-                                        SectionTitle { text: modelData[0].toUpperCase() }
-                                        Text { text: modelData[1]; color: textPrimary; font.pixelSize: 30; font.weight: Font.DemiBold }
-                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: keeper.navigate(modelData[2]) }
-                                    }
+                                    MetricCard { label: modelData[0]; value: String(modelData[1]); route: modelData[2] }
                                 }
                             }
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 14
                                 KPanel {
-                                    Layout.fillWidth: true; Layout.preferredHeight: 300
+                                    Layout.fillWidth: true; Layout.preferredHeight: 320
                                     SectionTitle { text: "CURRENT PROJECT" }
-                                    BodyText { text: text(keeper.state.project ? keeper.state.project.title : "", "No active Keeper project"); font.pixelSize: 20; font.weight: Font.DemiBold }
+                                    BodyText { Layout.fillWidth: true; text: text(keeper.state.project ? keeper.state.project.title : "", "No active Keeper project"); font.pixelSize: 20; font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 }
                                     StatusPill { value: text(keeper.state.project ? keeper.state.project.status : "", "NOT_STARTED") }
                                     MutedText { text: keeper.state.project && keeper.state.project.charterRevision ? "Founder-approved charter revision " + keeper.state.project.charterRevision : "Describe a project in Keeper Assistant to create a proposed charter."; Layout.fillWidth: true }
+                                    Rectangle { Layout.fillWidth: true; height: 1; color: "#2B2D2C" }
+                                    MutedText { text: "Every launch remains bound to the active charter and verified provider identity."; Layout.fillWidth: true }
                                     Item { Layout.fillHeight: true }
                                     GoldButton { text: keeper.state.project && keeper.state.project.approvalRequired ? "Review Founder Approval" : "Open Workflows"; onClicked: keeper.navigate(keeper.state.project && keeper.state.project.approvalRequired ? "Projects" : "Workflows") }
                                 }
                                 KPanel {
-                                    Layout.fillWidth: true; Layout.preferredHeight: 380
+                                    Layout.fillWidth: true; Layout.preferredHeight: 320
                                     SectionTitle { text: "SYSTEM INTEGRITY" }
-                                    Repeater {
-                                        model: keeper.state.rightRail || []
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            Rectangle { width: 8; height: 8; radius: 4; color: statusColor(modelData[1]) }
-                                            MutedText { text: modelData[0]; Layout.fillWidth: true }
-                                            BodyText { text: modelData[1]; font.pixelSize: 12 }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        spacing: 3
+                                        Repeater {
+                                            model: keeper.state.rightRail || []
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                Layout.minimumHeight: 16
+                                                Rectangle { width: 8; height: 8; radius: 4; color: statusColor(modelData[1]) }
+                                                MutedText { text: modelData[0]; Layout.preferredWidth: 150; elide: Text.ElideRight; maximumLineCount: 1 }
+                                                BodyText { Layout.fillWidth: true; Layout.minimumWidth: 0; text: modelData[1]; font.pixelSize: 12; horizontalAlignment: Text.AlignRight; elide: Text.ElideMiddle; maximumLineCount: 1 }
+                                            }
                                         }
                                     }
                                 }
@@ -480,7 +616,7 @@ ApplicationWindow {
                         ColumnLayout {
                             id: workflowColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
                             PageHeader { title: "Workflows"; subtitle: "Plan, implementation, independent review, repair, and verification."; actionText: "Run Approved Work"; actionEnabled: !!(keeper.state.project && keeper.state.project.id) && !keeper.busy; onAction: keeper.runDelegatedCompletion() }
-                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "ACTIVE WORKFLOW" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; spacing: 10; model: filtered(keeper.state.workflows || []); delegate: Rectangle { width: ListView.view.width; height: 92; radius: 6; color: workflowMouse.containsMouse ? "#1B1D1C" : "#121414"; border.color: statusColor(modelData.status); RowLayout { anchors.fill: parent; anchors.margins: 16; Rectangle { width: 42; height: 42; radius: 21; color: "#2D2513"; Text { anchors.centerIn: parent; text: index + 1; color: goldBright; font.pixelSize: 18 } } ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.title, "Work item"); font.weight: Font.DemiBold } MutedText { text: "Role: " + window.text(modelData.role, "unassigned") } } StatusPill { value: window.text(modelData.status, "PROPOSED") } QuietButton { text: "Stage details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } MouseArea { id: workflowMouse; anchors.fill: parent; hoverEnabled: true; z: -1; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No workflow planned"; detail: "Approve the proposed charter once. Keeper will then plan and advance routine work inside its delegated envelope." } } }
+                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "ACTIVE WORKFLOW" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 10; model: filtered(keeper.state.workflows || []); delegate: Rectangle { width: ListView.view.width; height: 82; radius: 6; color: workflowMouse.containsMouse ? "#1B1D1C" : "#121414"; border.color: statusColor(modelData.status); RowLayout { anchors.fill: parent; anchors.margins: 14; Rectangle { Layout.preferredWidth: 42; Layout.preferredHeight: 42; radius: 21; color: "#2D2513"; Text { anchors.centerIn: parent; text: index + 1; color: goldBright; font.pixelSize: 18 } } ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, "Work item"); font.weight: Font.DemiBold; elide: Text.ElideRight; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Role: " + window.text(modelData.role, "unassigned"); elide: Text.ElideRight; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "PROPOSED") } QuietButton { text: "Stage details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } MouseArea { id: workflowMouse; anchors.fill: parent; hoverEnabled: true; z: -1; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No workflow planned"; detail: "Approve the proposed charter once. Keeper will then plan and advance routine work inside its delegated envelope." } } }
                         }
                     }
 
@@ -507,7 +643,7 @@ ApplicationWindow {
                                         width: ListView.view.width; height: 76; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
                                         RowLayout {
                                             anchors.fill: parent; anchors.margins: 12
-                                            ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.title, modelData.id); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.objective, "No objective") + " • " + window.text(modelData.target_branch, "no branch") } }
+                                            ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, modelData.id); font.weight: Font.DemiBold; elide: Text.ElideRight; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: window.text(modelData.objective, "No objective") + " • " + window.text(modelData.target_branch, "no branch"); elide: Text.ElideMiddle; maximumLineCount: 1 } }
                                             StatusPill { value: window.text(modelData.status, "INTAKE") }
                                             QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } }
                                             GoldButton { text: "Start"; enabled: String(modelData.status || "INTAKE").toUpperCase() === "INTAKE"; onClicked: keeper.startTask(modelData.id) }
@@ -568,7 +704,7 @@ ApplicationWindow {
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 300; SectionTitle { text: "EVIDENCE BUNDLES" }
                                 ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.evidence || []); clip: true
                                     delegate: Rectangle { width: ListView.view.width; height: 72; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
-                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.evidence_id, "Evidence bundle"); font.weight: Font.DemiBold } MutedText { text: "Producer " + window.text(modelData.producer, "unknown") + " • digest " + window.text(modelData.digest, "unavailable") } } StatusPill { value: window.text(modelData.state, "UNTRUSTED") } QuietButton { text: "Safe details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } }
+                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.evidence_id, "Evidence bundle"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Producer " + window.text(modelData.producer, "unknown") + " • digest " + window.text(modelData.digest, "unavailable"); elide: Text.ElideMiddle; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.state, "UNTRUSTED") } QuietButton { text: "Safe details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } }
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No validated evidence"; detail: "Provider output remains untrusted until Keeper validates and binds it to an attempt." }
                                 }
@@ -576,7 +712,7 @@ ApplicationWindow {
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 300; SectionTitle { text: "TYPED EVIDENCE REFERENCES" }
                                 ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.evidenceReferences || []); clip: true
                                     delegate: Rectangle { width: ListView.view.width; height: 76; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
-                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.reference_id, "Typed reference"); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.classification, "UNKNOWN") + " • source " + window.text(modelData.source_producer, "unknown") + " • " + window.text(modelData.size_bytes, "0") + " bytes • digest " + window.text(modelData.digest, "unavailable") } } StatusPill { value: window.text(modelData.review_state, modelData.validation_state) } QuietButton { text: "Preview metadata"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } }
+                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.reference_id, "Typed reference"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: window.text(modelData.classification, "UNKNOWN") + " • source " + window.text(modelData.source_producer, "unknown") + " • " + window.text(modelData.size_bytes, "0") + " bytes • digest " + window.text(modelData.digest, "unavailable"); elide: Text.ElideMiddle; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.review_state, modelData.validation_state) } QuietButton { text: "Preview metadata"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } }
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No typed references"; detail: "Validated references for independent review appear here without exposing protected local paths." }
                                 }
@@ -584,7 +720,7 @@ ApplicationWindow {
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 260; SectionTitle { text: "SAFE RUN EVIDENCE PREVIEW" }
                                 ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.runs || []); clip: true
                                     delegate: Rectangle { width: ListView.view.width; height: 72; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
-                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, "Run"); font.weight: Font.DemiBold } MutedText { text: "Redacted allowlisted text logs and digests only" } } QuietButton { text: "Preview logs"; onClicked: { var preview = keeper.evidenceDetails(modelData.id, "logs"); if (Object.keys(preview).length > 0) { window.selectedRecord = preview; recordDialog.open() } } } }
+                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.id, "Run"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Redacted allowlisted text logs and digests only"; elide: Text.ElideRight; maximumLineCount: 1 } } QuietButton { text: "Preview logs"; onClicked: { var preview = keeper.evidenceDetails(modelData.id, "logs"); if (Object.keys(preview).length > 0) { window.selectedRecord = preview; recordDialog.open() } } } }
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No run evidence"; detail: "Supported redacted text previews appear only for runs with validated Keeper evidence roots." }
                                 }
@@ -604,7 +740,7 @@ ApplicationWindow {
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "RUN REPORTS" }
                                 ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.runs || []); clip: true
                                     delegate: Rectangle { width: ListView.view.width; height: 78; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
-                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, "Run"); font.weight: Font.DemiBold } MutedText { text: "Task " + window.text(modelData.task_id, "unknown") + (modelData.evidence_manifest_digest ? " • finalized evidence available" : " • report unavailable until finalization") } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { text: "Export"; enabled: !!modelData.evidence_manifest_digest; onClicked: { window.selectedRunId = modelData.id; reportFileDialog.open() } } }
+                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.id, "Run"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Task " + window.text(modelData.task_id, "unknown") + (modelData.evidence_manifest_digest ? " • finalized evidence available" : " • report unavailable until finalization"); elide: Text.ElideMiddle; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { text: "Export"; enabled: !!modelData.evidence_manifest_digest; onClicked: { window.selectedRunId = modelData.id; reportFileDialog.open() } } }
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No run reports"; detail: "A report becomes available only after Keeper validates and finalizes the run evidence." }
                                 }
@@ -684,11 +820,11 @@ ApplicationWindow {
                                 RowLayout { Layout.fillWidth: true; MutedText { Layout.fillWidth: true; text: keeper.state.settings ? keeper.state.settings.evidenceDirectory : "Not configured" } QuietButton { text: "Change…"; onClicked: { folderDialog.mode = "settingsEvidence"; folderDialog.open() } } }
                                 BodyText { text: "Configured provider executable identities" }
                                 Repeater { model: keeper.state.settings ? Object.keys(keeper.state.settings.providerPaths || {}) : []; RowLayout { Layout.fillWidth: true; MutedText { Layout.preferredWidth: 120; text: modelData } MutedText { Layout.fillWidth: true; text: keeper.state.settings.providerPaths[modelData] } } }
-                                MutedText { visible: !(keeper.state.settings && Object.keys(keeper.state.settings.providerPaths || {}).length); text: "No provider executable path is configured. Saving a path never registers or qualifies a provider."; color: warning }
-                                RowLayout { Layout.fillWidth: true; TextField { id: settingsProviderName; objectName: "settingsProviderName"; Layout.preferredWidth: 160; placeholderText: "Provider name"; color: textPrimary; background: Rectangle { color: "#101212"; border.color: parent.activeFocus ? gold : "#393B3A"; radius: 4 } } TextField { id: settingsProviderPath; objectName: "settingsProviderPath"; Layout.fillWidth: true; placeholderText: "Existing executable path"; color: textPrimary; background: Rectangle { color: "#101212"; border.color: parent.activeFocus ? gold : "#393B3A"; radius: 4 } } QuietButton { text: "Browse…"; onClicked: providerFileDialog.open() } GoldButton { text: "Validate & Save"; enabled: settingsProviderName.text.trim().length > 0 && settingsProviderPath.text.trim().length > 0; onClicked: keeper.setProviderPath(settingsProviderName.text, settingsProviderPath.text) } }
+                                MutedText { Layout.fillWidth: true; visible: !(keeper.state.settings && Object.keys(keeper.state.settings.providerPaths || {}).length); text: "No provider executable path is configured. Saving a path never registers or qualifies a provider."; color: warning }
+                                RowLayout { Layout.fillWidth: true; TextField { id: settingsProviderName; objectName: "settingsProviderName"; Layout.preferredWidth: 140; Layout.minimumWidth: 110; placeholderText: "Provider name"; color: textPrimary; background: Rectangle { color: "#101212"; border.color: parent.activeFocus ? gold : "#393B3A"; radius: 4 } } TextField { id: settingsProviderPath; objectName: "settingsProviderPath"; Layout.fillWidth: true; Layout.minimumWidth: 150; placeholderText: "Existing executable path"; color: textPrimary; background: Rectangle { color: "#101212"; border.color: parent.activeFocus ? gold : "#393B3A"; radius: 4 } } QuietButton { text: "Browse…"; onClicked: providerFileDialog.open() } GoldButton { text: "Validate & Save"; enabled: settingsProviderName.text.trim().length > 0 && settingsProviderPath.text.trim().length > 0; onClicked: keeper.setProviderPath(settingsProviderName.text, settingsProviderPath.text) } }
                                 RowLayout { Layout.alignment: Qt.AlignRight; QuietButton { objectName: "settingsCancel"; text: "Cancel"; onClicked: { settingsProviderName.clear(); settingsProviderPath.clear(); keeper.refresh() } } QuietButton { text: "Reset presentation"; onClicked: keeper.resetPresentationSettings() } }
                             }
-                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 250; SectionTitle { text: "KEEPERAUTHORITY HEALTH" } StatusPill { value: keeper.state.diagnostics ? window.text(keeper.state.diagnostics.authorityStatus, "UNAVAILABLE") : "UNAVAILABLE" } MutedText { Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; text: keeper.state.diagnostics && keeper.state.diagnostics.authority ? JSON.stringify(keeper.state.diagnostics.authority, null, 2) : "No supported health response is available." } MutedText { text: "This health projection is read-only and cannot launch, install, restart, or reconfigure the service."; color: warning } }
+                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 360; SectionTitle { text: "KEEPERAUTHORITY HEALTH" } StatusPill { value: keeper.state.diagnostics ? window.text(keeper.state.diagnostics.authorityStatus, "UNAVAILABLE") : "UNAVAILABLE" } ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; Text { width: parent.width; color: textMuted; font.pixelSize: 12; wrapMode: Text.WrapAnywhere; textFormat: Text.PlainText; text: keeper.state.diagnostics && keeper.state.diagnostics.authority ? JSON.stringify(keeper.state.diagnostics.authority, null, 2) : "No supported health response is available." } } MutedText { Layout.fillWidth: true; text: "This health projection is read-only and cannot launch, install, restart, or reconfigure the service."; color: warning } }
                         }
                     }
                 }

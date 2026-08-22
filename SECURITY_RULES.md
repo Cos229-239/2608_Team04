@@ -17,6 +17,7 @@ Security, explicit Founder authority, effect accounting, and durable recovery ta
 - Every operation that may create an external effect requires a stable durable claim before the effect.
 - Restart, timeout, response loss, and concurrency must not duplicate registration, qualification, model, provider, usage, Git, or publication effects.
 - `UNCERTAIN` and unresolved claims remain signed, visible, and blocking until supported reconciliation or exact Founder disposition.
+- A synchronous Authority rejection may release its prelaunch uncertainty only when an immediate authenticated observation reports the exact attempt identity absent; response loss, restart recovery, present, malformed, mismatched, or unavailable observations remain blocking.
 - Diagnostics must not report READY/IDLE while hiding unresolved durable effects.
 
 ## Windows service and package security

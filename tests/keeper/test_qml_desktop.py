@@ -12,6 +12,7 @@ from keeper.ui_qml.composition import ProductSetupController
 from keeper.ui_qml.controller import (
     KeeperDesktopController,
     NAVIGATION,
+    _primitive,
     _safe_error_message,
 )
 
@@ -77,6 +78,28 @@ def test_qml_projection_is_primitive_and_redacts_evidence_path(
 
     assert str(tmp_path) not in repr(snapshot)
     assert _is_primitive(snapshot)
+
+
+def test_qml_projection_stringifies_only_integers_outside_signed_64_bit() -> None:
+    maximum = 2**63 - 1
+    minimum = -(2**63)
+    projected = _primitive(
+        {
+            "maximum": maximum,
+            "minimum": minimum,
+            "unsigned_file_id": 10687299546425997470,
+            "negative_overflow": minimum - 1,
+            "flag": True,
+        }
+    )
+
+    assert projected == {
+        "maximum": maximum,
+        "minimum": minimum,
+        "unsigned_file_id": "10687299546425997470",
+        "negative_overflow": str(minimum - 1),
+        "flag": True,
+    }
 
 
 def test_assistant_creates_durable_conversation_not_fake_chat(

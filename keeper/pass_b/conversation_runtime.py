@@ -58,6 +58,10 @@ class DurableConversationService(ConversationService):
         return self.repository.replace(
             replace(
                 current,
+                intake={
+                    **current.intake,
+                    "__charter__": charter.to_dict(),
+                },
                 state="APPROVED",
                 updated_at=charter.updated_at,
                 revision=current.revision + 1,

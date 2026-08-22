@@ -37,6 +37,17 @@ class ConversationExecutive(Protocol):
 
     def propose_charter(self, charter: ProjectCharter) -> ProjectCharter: ...
 
+    def active_charter(self, project_id: str) -> ProjectCharter: ...
+
+    def revise_charter(
+        self,
+        active: ProjectCharter,
+        intake: IntakeResult,
+        *,
+        reason: str,
+        authority_basis: str,
+    ) -> ProjectCharter: ...
+
     def request_charter_approval(
         self, charter: ProjectCharter
     ) -> FounderApprovalChallenge: ...
@@ -181,7 +192,17 @@ class ConversationService:
         intake = ConversationIntake.revise(
             _intake_from_dict(current.intake), replacements=replacements
         )
-        draft = self.executive.draft(project_id, intake)
+        active: ProjectCharter | None = None
+        if current.state == "APPROVED":
+            active = self.executive.active_charter(project_id)
+            draft = self.executive.revise_charter(
+                active,
+                intake,
+                reason="Founder requested charter renewal or revision",
+                authority_basis="Explicit Founder conversation revision",
+            )
+        else:
+            draft = self.executive.draft(project_id, intake)
         proposed = self.executive.propose_charter(draft)
         now = _now()
         self.repository.replace(
@@ -223,8 +244,12 @@ class ConversationService:
                 name=proposed.title,
                 project_type=proposed.project_type,
                 state="AWAITING_CHARTER_APPROVAL",
-                active_charter_id=None,
-                active_charter_revision=None,
+                active_charter_id=(
+                    active.charter_id if active is not None else None
+                ),
+                active_charter_revision=(
+                    active.revision if active is not None else None
+                ),
                 pause_reason=None,
                 created_at=proposed.created_at,
                 updated_at=proposed.updated_at,

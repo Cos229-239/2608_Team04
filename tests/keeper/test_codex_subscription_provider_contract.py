@@ -87,6 +87,19 @@ def _zero_launch_journal() -> dict[str, object]:
     }
 
 
+def test_authority_output_schema_normalizes_executive_role_aliases() -> None:
+    assert authority_provider_output_schema(
+        "implementer", provider_input_required=False
+    ) == authority_provider_output_schema(
+        "builder", provider_input_required=False
+    )
+    assert authority_provider_output_schema(
+        "executive_reviewer", provider_input_required=True
+    ) == authority_provider_output_schema(
+        "reviewer", provider_input_required=True
+    )
+
+
 class _FakeClientProcessBinding(NamedPipeClientProcessBinding):
     def __init__(self, sid: str = "S-1-5-21-1000", session_id: int = 1) -> None:
         self.pipe = 11

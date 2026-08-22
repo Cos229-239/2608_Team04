@@ -80,7 +80,7 @@ def test_named_pipe_authenticates_client_and_serves_framed_request(
                     "Codex sandbox intentionally presents a restricted token"
                 )
             raise
-        assert result["service_version"] == "1.7.50"
+        assert result["service_version"] == "1.7.51"
         assert result["schema_version"] == 6
         assert result["client_sid"] == current_process_sid()
     finally:

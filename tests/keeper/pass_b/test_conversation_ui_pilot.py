@@ -7,6 +7,7 @@ import pytest
 
 from keeper.executive.models import ProjectCharter
 from keeper.pass_b.conversation import (
+    CharterDraftContextRecord,
     DynamicWorkflowDesigner,
     activate_delegated_mode,
     revoke_delegated_mode,
@@ -72,6 +73,47 @@ def test_approval_recording_rejects_unapproved_charter(tmp_path: Path) -> None:
 
     with pytest.raises(PermissionError):
         application.conversation.record_approval(outcome.charter)
+
+
+def test_active_charter_can_be_renewed_without_losing_current_authority(
+    tmp_path: Path,
+) -> None:
+    application, active = _approved_application(tmp_path)
+    executive = application.executive
+    assert isinstance(executive, PilotConversationExecutive)
+
+    outcome = application.conversation.revise(active.project_id, {})
+    project_awaiting_approval = executive.repository.project(active.project_id)
+    charters = executive.repository.charters(active.project_id)
+    contexts = application.repository.list(
+        CharterDraftContextRecord, project_id=active.project_id
+    )
+
+    assert outcome.charter.status == "PROPOSED"
+    assert outcome.charter.revision == active.revision + 1
+    assert outcome.charter.supersedes_charter_id == active.charter_id
+    assert outcome.project.active_charter_id == active.charter_id
+    assert outcome.project.active_charter_revision == active.revision
+    assert project_awaiting_approval.state == "AWAITING_CHARTER_APPROVAL"
+    assert project_awaiting_approval.active_charter_id == active.charter_id
+    assert executive.repository.charter(active.charter_id).status == "ACTIVE"
+    assert len(charters) == active.revision + 1
+    assert len([item for item in contexts if item.state != "SUPERSEDED"]) == 1
+    assert application.conversation.current_context(active.project_id).state == (
+        "PROPOSED"
+    )
+
+    challenge = application.conversation.request_approval(active.project_id)
+    _, renewed = executive.approve_and_activate(challenge)
+    approved_context = application.conversation.record_approval(renewed)
+
+    assert renewed.status == "ACTIVE"
+    assert renewed.revision == active.revision + 1
+    assert approved_context.state == "APPROVED"
+    assert approved_context.intake["__charter__"] == renewed.to_dict()
+    assert executive.repository.project(active.project_id).active_charter_id == (
+        renewed.charter_id
+    )
 
 
 def test_delegated_mode_is_founder_bound_scoped_and_revocable(

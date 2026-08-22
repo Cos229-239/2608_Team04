@@ -154,6 +154,37 @@ class PilotConversationExecutive:
     def propose_charter(self, charter: ProjectCharter) -> ProjectCharter:
         return self.charters.propose(charter)
 
+    def active_charter(self, project_id: str) -> ProjectCharter:
+        project = self.repository.project(project_id)
+        if (
+            project.active_charter_id is None
+            or project.active_charter_revision is None
+        ):
+            raise PermissionError("project does not have an active charter")
+        charter = self.repository.charter(project.active_charter_id)
+        if (
+            charter.project_id != project_id
+            or charter.revision != project.active_charter_revision
+            or charter.status != "ACTIVE"
+        ):
+            raise PermissionError("project active charter binding is invalid")
+        return charter
+
+    def revise_charter(
+        self,
+        active: ProjectCharter,
+        intake: IntakeResult,
+        *,
+        reason: str,
+        authority_basis: str,
+    ) -> ProjectCharter:
+        return self.charters.revise_from_intake(
+            active,
+            intake,
+            reason=reason,
+            authority_basis=authority_basis,
+        )
+
     def request_charter_approval(
         self, charter: ProjectCharter
     ) -> FounderApprovalChallenge:

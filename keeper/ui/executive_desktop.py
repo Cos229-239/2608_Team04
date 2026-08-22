@@ -86,7 +86,7 @@ class KeeperExecutiveDesktop(_LegacyProductDesktop):
         brand = self.ttk.Frame(banner, style="Banner.TFrame")
         brand.grid(row=0, column=0, sticky="w", padx=22, pady=10)
         self.ttk.Label(
-            brand, text="DARKSAGE KEEPER", style="Brand.TLabel"
+            brand, text="KEEPER", style="Brand.TLabel"
         ).pack(anchor="w")
         self.ttk.Label(
             brand,
@@ -361,7 +361,7 @@ class KeeperExecutiveDesktop(_LegacyProductDesktop):
             fill="both", expand=True, padx=12, pady=(0, 4)
         )
         self.sage_label = self.ttk.Label(
-            integrity, text="Sage • listening", style="Gold.TLabel"
+            integrity, text="Keeper Assistant • listening", style="Gold.TLabel"
         )
         self.sage_label.pack(anchor="w", padx=14)
         self.sage_detail = self.ttk.Label(

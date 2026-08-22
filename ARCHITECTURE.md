@@ -25,6 +25,7 @@
 - Provider processes run with restricted tokens, sanitized environments, Job containment, and exact executable identity checks.
 - Registration/qualification persistence occurs only after exact identity and signed-result validation.
 - Uncertain or pending external effects block conflicting work until supported reconciliation or Founder disposition.
+- Authenticated absence reconciliation is limited to synchronous reservation rejection in the same live operation, with no external execution identity; it records the Authority identity and observation digest before releasing local reservations.
 - Retried operations reuse stable identities and cannot duplicate model/provider effects.
 - Package provenance, ACL, Defender, version, schema, and protocol checks fail closed.
 

@@ -992,7 +992,7 @@ def test_gateway_reconciliation_binds_semantic_request_and_host_result(
         / "DarkSage"
         / "KeeperProviderHost"
         / "versions"
-        / "1.7.50"
+        / "1.7.51"
         / "KeeperProviderHost.exe"
     )
     host_process.parent.mkdir(parents=True)
@@ -1092,7 +1092,7 @@ def test_authority_gateway_environment_uses_handle_validated_bin_without_service
         / "DarkSage"
         / "KeeperProviderHost"
         / "versions"
-        / "1.7.50"
+        / "1.7.51"
         / "KeeperProviderHost.exe"
     )
     host_process.parent.mkdir(parents=True)

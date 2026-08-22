@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from keeper.authority_service.client import ProductionAuthorityServiceClient
-from keeper.pass_b.application import PassBApplication
+from keeper.pass_b.application import (
+    PassBApplication,
+    authority_exchange_root_from_diagnostics,
+)
 from keeper.pass_b.repository import validate_protected_workspace_tree
 from keeper.ui.theme import THEME, configure_ttk
 from keeper.ui.view_models import SETUP_STEPS, ProductViewModel, build_product_view
@@ -106,7 +109,7 @@ class KeeperProductDesktop:
         self.project_id: str | None = self.pass_b.selected_project_id()
         self.developer_details_enabled = False
         self.root = tk.Tk()
-        self.root.title("DarkSage Keeper — Executive Control Center")
+        self.root.title("Keeper — Executive Control Center")
         self.root.geometry("1440x900")
         self.root.minsize(980, 680)
         configure_ttk(self.root, ttk)
@@ -270,7 +273,7 @@ class KeeperProductDesktop:
         self.home_summary = self._readonly_text(summary, height=16)
         self.home_summary.pack(fill="both", expand=True, padx=14, pady=(0, 8))
         self.sage_label = self.ttk.Label(
-            summary, text="Sage • listening", style="Gold.TLabel",
+            summary, text="Keeper Assistant • listening", style="Gold.TLabel",
         )
         self.sage_label.pack(anchor="w", padx=14)
         self.sage_detail = self.ttk.Label(
@@ -400,7 +403,7 @@ class KeeperProductDesktop:
                 before=self.refresh_button,
             )
         self.sage_label.configure(
-            text=f"Sage • {str(sage['mode']).casefold()} • "
+            text=f"Keeper Assistant • {str(sage['mode']).casefold()} • "
             f"{str(sage['activity_state']).casefold()}"
         )
         self.sage_detail.configure(
@@ -1022,12 +1025,15 @@ def _desktop_pass_b_application(
             from keeper.pass_b.provider_bridge import bridge_qualified_provider
             from keeper.pass_b.usage_authority import ProductionUsageResetVerifier
 
+            exchange_root = authority_exchange_root_from_diagnostics(
+                health_client.diagnostics()
+            )
             result = PassBApplication(
                 data_directory,
                 authority_client=health_client,
                 authority_health_client=health_client,
                 provider_bindings=bindings,
-                authority_exchange_root=data_directory / "authority-exchange",
+                authority_exchange_root=exchange_root,
                 usage_reset_verifier=ProductionUsageResetVerifier.unavailable(),
             )
             for binding in bindings:

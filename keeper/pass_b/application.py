@@ -75,6 +75,27 @@ class CharterActivator(Protocol):
     def activate_charter(self, charter: ProjectCharter) -> ProjectRecord: ...
 
 
+def authority_exchange_root_from_diagnostics(
+    diagnostics: dict[str, Any],
+) -> Path:
+    """Return the authenticated Authority-owned Pass B exchange directory."""
+
+    client_value = diagnostics.get("client_exchange_root")
+    evidence_value = diagnostics.get("allowed_evidence_root")
+    if (
+        not isinstance(client_value, str)
+        or not client_value
+        or not isinstance(evidence_value, str)
+        or not evidence_value
+    ):
+        raise RuntimeError("Authority Service client exchange is unavailable")
+    client_root = Path(client_value).resolve(strict=True)
+    evidence_root = Path(evidence_value).resolve(strict=True)
+    if evidence_root.parent != client_root:
+        raise PermissionError("Authority evidence root is outside the client exchange")
+    return evidence_root / "pass-b"
+
+
 
 
 class PassBApplication:

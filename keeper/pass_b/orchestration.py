@@ -2005,15 +2005,87 @@ class OrchestrationService:
                     updated_at=self._now(),
                 )
             except BaseException as error:
+                observation: dict[str, Any] | None = None
+                if type(error) is PermissionError:
+                    try:
+                        candidate = self.authority_reservation.observe(prepared)
+                        if (
+                            set(candidate)
+                            == {
+                                "found",
+                                "record",
+                                "service_key_id",
+                                "service_key_version",
+                                "client_sid",
+                            }
+                            and candidate.get("found") is False
+                            and candidate.get("record") is None
+                            and isinstance(
+                                candidate.get("service_key_id"), str
+                            )
+                            and bool(candidate.get("service_key_id"))
+                            and isinstance(
+                                candidate.get("service_key_version"), int
+                            )
+                            and int(candidate["service_key_version"]) >= 1
+                            and isinstance(candidate.get("client_sid"), str)
+                            and str(candidate["client_sid"]).startswith(
+                                "S-1-"
+                            )
+                        ):
+                            observation = candidate
+                    except (OSError, PermissionError, RuntimeError, ValueError):
+                        observation = None
                 try:
+                    uncertain_at = self._now()
                     self.repository.mark_authority_reservation_uncertain(
                         attempt_id,
                         detail=(
                             "Authority reservation or authorization outcome "
                             f"is uncertain: {type(error).__name__}"
                         ),
-                        updated_at=self._now(),
+                        updated_at=uncertain_at,
                     )
+                    if observation is not None:
+                        service_key_id = str(observation["service_key_id"])
+                        service_key_version = int(
+                            observation["service_key_version"]
+                        )
+                        client_sid = str(observation["client_sid"])
+                        observation_digest = hashlib.sha256(
+                            json.dumps(
+                                {
+                                    "outcome": "DEFINITIVE_REJECTION",
+                                    "authority_attempt_id": (
+                                        prepared.authority_attempt_id
+                                    ),
+                                    "reservation_plan_digest": (
+                                        prepared.reservation_plan_digest
+                                    ),
+                                    "found": False,
+                                    "record": None,
+                                    "service_key_id": service_key_id,
+                                    "service_key_version": (
+                                        service_key_version
+                                    ),
+                                    "client_sid": client_sid,
+                                },
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        self.repository.reconcile_absent_authority_reservation(
+                            assignment.assignment_id,
+                            attempt_id=attempt_id,
+                            authority_attempt_id=(
+                                prepared.authority_attempt_id
+                            ),
+                            observation_digest=observation_digest,
+                            service_key_id=service_key_id,
+                            service_key_version=service_key_version,
+                            client_sid=client_sid,
+                            reconciled_at=self._now(),
+                        )
                 except (KeyError, PermissionError):
                     pass
                 raise

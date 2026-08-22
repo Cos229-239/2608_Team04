@@ -2019,6 +2019,7 @@ def authority_provider_output_schema(
     role: str, *, provider_input_required: bool
 ) -> dict[str, Any]:
     """Return the one Authority-owned schema used at reserve and launch."""
+    role = normalize_authority_provider_role(role)
     schema = _domain_schema(role)
     if not provider_input_required or role != "reviewer":
         return schema
@@ -2031,6 +2032,25 @@ def authority_provider_output_schema(
     )
     required.append("review_input_declaration")
     return schema
+
+
+def normalize_authority_provider_role(role: str) -> str:
+    """Normalize Executive role aliases before schema construction."""
+    raw_role = role.casefold()
+    normalized = {
+        "author": "builder",
+        "implementer": "builder",
+        "executive_builder": "builder",
+        "executive_reviewer": "reviewer",
+        "executive_post_repair_reviewer": "post_repair_reviewer",
+    }.get(raw_role)
+    if normalized is not None:
+        return normalized
+    if "review" in raw_role:
+        return "reviewer"
+    if "repair" in raw_role:
+        return "repairer"
+    return "builder"
 
 
 def validate_value_against_schema(value: object, schema: object) -> bool:

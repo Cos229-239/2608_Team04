@@ -31,6 +31,7 @@ Exceptional states such as `BLOCKED`, `FAILED`, `PAUSED`, `CANCELLED`, and `RECO
 - API keys and credentials are never bundled.
 - Paid fallback and provider switching are never implicit.
 - A provider operation is uniquely identified, durably claimed, and recoverable across restart or lost response.
+- A prelaunch reservation synchronously rejected before Authority persistence can be reconciled only by an immediate authenticated exact-absence observation in that operation; every response-loss or restart uncertainty remains fenced.
 - External effects must be bounded, observable, and accounted before subsequent work is allowed.
 
 ## Supported environment
