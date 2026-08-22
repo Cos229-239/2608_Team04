@@ -106,6 +106,31 @@ def test_unknown_navigation_and_run_actions_fail_closed(
     assert "Unsupported run action" in controller._get_error()
 
 
+def test_reboot_is_guarded_and_emits_desktop_request(
+    controller: KeeperDesktopController,
+) -> None:
+    requests: list[bool] = []
+    controller.rebootRequested.connect(lambda: requests.append(True))
+
+    controller.reboot()
+
+    assert requests == [True]
+    assert controller._get_status() == "Rebooting Keeper Desktop"
+
+
+def test_reboot_remains_available_during_completion(
+    controller: KeeperDesktopController,
+) -> None:
+    requests: list[bool] = []
+    controller.rebootRequested.connect(lambda: requests.append(True))
+    controller._busy = True
+
+    controller.reboot()
+
+    assert requests == [True]
+    assert controller._get_status() == "Rebooting Keeper Desktop"
+
+
 def test_qml_has_no_sage_surface_and_disables_unsupported_authority() -> None:
     qml = (
         Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
@@ -113,6 +138,8 @@ def test_qml_has_no_sage_surface_and_disables_unsupported_authority() -> None:
     assert "Sage" not in qml
     assert 'actionText: "+ Register Provider"; actionEnabled: false' in qml
     assert 'actionText: "+ New Authorization"; actionEnabled: false' in qml
+    assert 'objectName: "rebootButton"' in qml
+    assert 'objectName: "confirmReboot"' in qml
     assert "Keeper Assistant" in qml
     assert "paid fallback is disabled" in qml
 

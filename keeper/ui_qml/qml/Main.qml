@@ -353,7 +353,8 @@ ApplicationWindow {
                         onTextChanged: window.searchQuery = text
                         background: Rectangle { color: "#121414"; radius: 5; border.color: parent.activeFocus ? gold : "#3A3C3B" }
                     }
-                    QuietButton { objectName: "refreshButton"; text: "Refresh"; onClicked: keeper.refresh() }
+                    QuietButton { objectName: "refreshButton"; text: "Refresh"; enabled: !keeper.busy; onClicked: keeper.refresh() }
+                    QuietButton { objectName: "rebootButton"; text: "Reboot Desktop"; ToolTip.text: "Restart the desktop and reconcile durable state"; onClicked: rebootDialog.open() }
                     Rectangle { width: 1; height: 34; color: border }
                     ColumnLayout {
                         spacing: 0
@@ -745,6 +746,24 @@ ApplicationWindow {
                 Layout.fillWidth: true; Layout.preferredHeight: 34
                 color: "#0A0C0B"; border.color: "#242625"
                 RowLayout { anchors.fill: parent; anchors.leftMargin: 18; anchors.rightMargin: 18; Rectangle { width: 8; height: 8; radius: 4; color: keeper.error ? danger : success } MutedText { Layout.fillWidth: true; text: keeper.error ? keeper.error : keeper.status; color: keeper.error ? danger : textMuted } MutedText { text: "Authority effect: governed by Keeper services" } }
+            }
+        }
+    }
+
+    Dialog {
+        id: rebootDialog
+        objectName: "rebootDialog"
+        anchors.centerIn: parent
+        modal: true
+        title: "Reboot Keeper Desktop"
+        standardButtons: Dialog.Cancel
+        background: Rectangle { color: panelRaised; border.color: goldDim; radius: 8 }
+        contentItem: ColumnLayout {
+            spacing: 12
+            BodyText { Layout.fillWidth: true; text: "Keeper will close and reopen this desktop. Durable state is recovered when it starts again."; wrapMode: Text.Wrap }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                GoldButton { objectName: "confirmReboot"; text: "Reboot"; onClicked: { rebootDialog.close(); keeper.reboot() } }
             }
         }
     }
