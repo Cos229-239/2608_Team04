@@ -240,6 +240,12 @@ class AuthorityServiceClient:
                 "legacy_authority_package_sha256": (
                     "19102c5ed7ad2a278c18d49284a8fbea0a189031d4ee4ddf55ed4687120e2211"
                 ),
+                "legacy_authority_runtime_executable_sha256": (
+                    "03168c01b7b7491423350e82c26fee71f35b43694d1319d3c668bda6903a0c38"
+                ),
+                "legacy_authority_runtime_peer_digest": (
+                    "da25662c9921d468fc039fe1bcbde86be791570c66fa335f50c6d604bc381fbc"
+                ),
                 "legacy_host_version": "1.7.47",
                 "legacy_host_executable_sha256": (
                     "e81327789faff88c187c007182268049fb81ca4974f02a0ba53e6618a1340fae"
@@ -336,6 +342,7 @@ class AuthorityServiceClient:
         required_authority_version: str,
         required_host_version: str,
         founder_capability: dict[str, object],
+        retry_generation: int = 2,
     ) -> dict[str, Any]:
         return self.request(
             Operation.AUTHORIZE_PROVIDER_QUALIFICATION_RETRY,
@@ -343,7 +350,7 @@ class AuthorityServiceClient:
                 "registration_id": registration_id,
                 "qualification_id": qualification_id,
                 "qualification_failure_digest": qualification_failure_digest,
-                "retry_generation": 2,
+                "retry_generation": retry_generation,
                 "required_authority_version": required_authority_version,
                 "required_host_version": required_host_version,
                 "founder_capability": founder_capability,

@@ -1373,9 +1373,12 @@ class AuthorityStore:
                     raise PermissionError(
                         "higher launch generation requires the exact next revoked epoch"
                     )
-            elif generation != 1 or payload.get("revocation_epoch") != 0:
+            elif (
+                generation < 1
+                or payload.get("revocation_epoch") != generation - 1
+            ):
                 raise PermissionError(
-                    "initial launch authorization generation must be one"
+                    "initial launch authorization generation and revocation epoch are inconsistent"
                 )
             expected_consumption = {
                 "capability_id", "project_id", "approval_record_id",

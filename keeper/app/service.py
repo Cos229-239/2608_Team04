@@ -212,9 +212,49 @@ class KeeperApplication:
         existing_registrations = self.provider_registrations()
         existing_registration = existing_registrations.get(provider_id)
         if existing_registration is not None and existing_registration != registration:
-            raise PermissionError(
-                "local provider projection conflicts with another registration"
+            existing_registration_id = existing_registration.get(
+                "trusted_registration_id"
             )
+            existing_authority_result = (
+                self.authority.query_state(
+                    "registrations", existing_registration_id
+                )
+                if isinstance(existing_registration_id, str)
+                else {}
+            )
+            existing_authority_value = existing_authority_result.get("record")
+            existing_authority_registration = (
+                dict(existing_authority_value)
+                if existing_authority_result.get("found")
+                and isinstance(existing_authority_value, dict)
+                else None
+            )
+            existing_authority_state = (
+                existing_authority_registration.pop("service_state", None)
+                if existing_authority_registration is not None
+                else None
+            )
+            existing_executable = (
+                existing_authority_registration.get("canonical_executable_path")
+                if existing_authority_registration is not None
+                else None
+            )
+            if (
+                existing_authority_state != "REVOKED"
+                or existing_authority_registration is None
+                or existing_authority_registration.get("registration_lifecycle")
+                != "REVOKED"
+                or existing_authority_registration.get("logical_provider_id")
+                != provider_id
+                or existing_authority_registration.get("trusted_registration_id")
+                != existing_registration_id
+                or not isinstance(existing_executable, str)
+                or Path(existing_executable).resolve()
+                != Path(str(registration["canonical_executable_path"])).resolve()
+            ):
+                raise PermissionError(
+                    "local provider projection conflicts with another registration"
+                )
 
         artifacts_to_insert: list[tuple[str, dict[str, Any]]] = []
         for artifact in (start, evidence):

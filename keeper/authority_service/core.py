@@ -49,11 +49,17 @@ from keeper.providers.claude_contract import (
 )
 
 
-SERVICE_VERSION = "1.7.50"
+SERVICE_VERSION = "1.7.51"
 RESTORE_FENCE_LIFETIME = timedelta(minutes=2)
 _LEGACY_PREDISPATCH_AUTHORITY_VERSION = "1.7.47"
 _LEGACY_PREDISPATCH_AUTHORITY_PACKAGE_SHA256 = (
     "19102c5ed7ad2a278c18d49284a8fbea0a189031d4ee4ddf55ed4687120e2211"
+)
+_LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_EXECUTABLE_SHA256 = (
+    "03168c01b7b7491423350e82c26fee71f35b43694d1319d3c668bda6903a0c38"
+)
+_LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_PEER_DIGEST = (
+    "da25662c9921d468fc039fe1bcbde86be791570c66fa335f50c6d604bc381fbc"
 )
 _LEGACY_PREDISPATCH_HOST_VERSION = "1.7.47"
 _LEGACY_PREDISPATCH_HOST_EXECUTABLE_SHA256 = (
@@ -1181,6 +1187,8 @@ class AuthorityServiceCore:
                 "enrollment_id",
                 "legacy_authority_version",
                 "legacy_authority_package_sha256",
+                "legacy_authority_runtime_executable_sha256",
+                "legacy_authority_runtime_peer_digest",
                 "legacy_host_version",
                 "legacy_host_executable_sha256",
                 "legacy_host_manifest_sha256",
@@ -1199,6 +1207,16 @@ class AuthorityServiceCore:
                 "legacy Authority package digest",
             )
             != _LEGACY_PREDISPATCH_AUTHORITY_PACKAGE_SHA256
+            or _sha256_text(
+                payload["legacy_authority_runtime_executable_sha256"],
+                "legacy Authority runtime executable digest",
+            )
+            != _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_EXECUTABLE_SHA256
+            or _sha256_text(
+                payload["legacy_authority_runtime_peer_digest"],
+                "legacy Authority runtime peer digest",
+            )
+            != _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_PEER_DIGEST
             or payload["legacy_host_version"] != _LEGACY_PREDISPATCH_HOST_VERSION
             or _sha256_text(
                 payload["legacy_host_executable_sha256"],
@@ -1256,6 +1274,8 @@ class AuthorityServiceCore:
                 "enrollment_id",
                 "event_challenge_digest",
                 "legacy_authority_package_sha256",
+                "legacy_authority_runtime_executable_sha256",
+                "legacy_authority_runtime_peer_digest",
                 "legacy_authority_version",
                 "legacy_host_executable_sha256",
                 "legacy_host_manifest_sha256",
@@ -1358,7 +1378,9 @@ class AuthorityServiceCore:
             or str(installation.get("manifest_sha256", "")).casefold()
             != _LEGACY_PREDISPATCH_HOST_MANIFEST_SHA256
             or str(authority_peer.get("executable_sha256", "")).casefold()
-            != _LEGACY_PREDISPATCH_AUTHORITY_PACKAGE_SHA256
+            != _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_EXECUTABLE_SHA256
+            or _canonical_digest(authority_peer)
+            != _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_PEER_DIGEST
         ):
             raise PermissionError(
                 "legacy Provider Host enrollment does not match the bounded defect"
@@ -1387,6 +1409,12 @@ class AuthorityServiceCore:
             ).hexdigest(),
             "legacy_authority_package_sha256": (
                 _LEGACY_PREDISPATCH_AUTHORITY_PACKAGE_SHA256
+            ),
+            "legacy_authority_runtime_executable_sha256": (
+                _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_EXECUTABLE_SHA256
+            ),
+            "legacy_authority_runtime_peer_digest": (
+                _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_PEER_DIGEST
             ),
             "legacy_authority_version": _LEGACY_PREDISPATCH_AUTHORITY_VERSION,
             "legacy_host_executable_sha256": (
@@ -1913,7 +1941,11 @@ class AuthorityServiceCore:
         )
         if (
             payload["attempt_generation"] != 2
-            or expected_account_plan_type not in CODEX_ALLOWED_SUBSCRIPTION_PLANS
+            or expected_account_plan_type
+            not in (
+                CODEX_ALLOWED_SUBSCRIPTION_PLANS
+                | CLAUDE_ALLOWED_SUBSCRIPTION_PLANS
+            )
             or payload["required_authority_version"] != SERVICE_VERSION
             or payload["required_host_version"] != SERVICE_VERSION
             or payload["effect_accounting"]
@@ -1980,6 +2012,22 @@ class AuthorityServiceCore:
         start = current.get("start")
         failure = current.get("failure")
         request_binding = current.get("request_binding")
+        provider_id = (
+            request_binding.get("provider_id")
+            if isinstance(request_binding, dict)
+            else None
+        )
+        eligible_failure = (
+            provider_id == "codex"
+            and failure.get("failure_stage") == "ACCOUNT_PROBE_VALIDATE"
+            and failure.get("failure_code") == "PERMISSION_REJECTED"
+        ) or (
+            provider_id == "claude"
+            and failure.get("failure_stage") == "VERSION_LAUNCH"
+            and failure.get("failure_code") == "PERMISSION_REJECTED"
+            and failure.get("process_result")
+            == {"detail_status": "DETAIL_UNAVAILABLE"}
+        ) if isinstance(failure, dict) else False
         if (
             current.get("kind") != "provider_registration_failed"
             or "registration_lineage" in current
@@ -1995,8 +2043,7 @@ class AuthorityServiceCore:
             or not isinstance(failure, dict)
             or not self.keys.verify("provider-registration-failure", failure)
             or _canonical_digest(failure) != failure_digest
-            or failure.get("failure_stage") != "ACCOUNT_PROBE_VALIDATE"
-            or failure.get("failure_code") != "PERMISSION_REJECTED"
+            or not eligible_failure
             or failure.get("effect_accounting")
             != {
                 "registration_persisted": False,
@@ -2866,7 +2913,7 @@ class AuthorityServiceCore:
             payload["required_host_version"], "required Host version"
         )
         if (
-            retry_generation != 2
+            retry_generation not in {2, 3}
             or required_authority_version != SERVICE_VERSION
             or required_host_version != SERVICE_VERSION
         ):
@@ -2875,6 +2922,11 @@ class AuthorityServiceCore:
             )
         registration_record = self.store.get("registrations", registration_id)
         qualification_record = self.store.get("qualifications", qualification_id)
+        expected_qualification_fields = (
+            {"start", "evidence"}
+            if retry_generation == 2
+            else {"start", "evidence", "retry_authorization"}
+        )
         if (
             registration_record is None
             or registration_record.pop("service_state", None)
@@ -2886,12 +2938,15 @@ class AuthorityServiceCore:
             or qualification_record is None
             or qualification_record.pop("service_state", None)
             != "QUALIFICATION_FAILED"
-            or set(qualification_record) != {"start", "evidence"}
+            or set(qualification_record) != expected_qualification_fields
         ):
             raise PermissionError(
                 "Provider qualification has no exact terminal failure for retry"
             )
         evidence = qualification_record.get("evidence")
+        prior_retry_authorization = qualification_record.get(
+            "retry_authorization"
+        )
         if (
             not isinstance(evidence, dict)
             or not self.keys.verify("provider-qualification", evidence)
@@ -2902,6 +2957,21 @@ class AuthorityServiceCore:
         ):
             raise PermissionError(
                 "Provider qualification terminal failure evidence is invalid"
+            )
+        if retry_generation == 3 and (
+            not isinstance(prior_retry_authorization, dict)
+            or not self.keys.verify(
+                "provider-qualification-retry-authorization",
+                prior_retry_authorization,
+            )
+            or prior_retry_authorization.get("registration_id")
+            != registration_id
+            or prior_retry_authorization.get("retry_qualification_id")
+            != qualification_id
+            or prior_retry_authorization.get("retry_generation") != 2
+        ):
+            raise PermissionError(
+                "Provider qualification final retry lineage is invalid"
             )
         action_binding = {
             "action": "AUTHORIZE_PROVIDER_QUALIFICATION_RETRY",
@@ -2973,7 +3043,7 @@ class AuthorityServiceCore:
                 "state": str(existing["service_state"]),
             }
         authorization_id = (
-            f"provider-qualification-retry:{registration_id}:generation:2"
+            f"provider-qualification-retry:{registration_id}:generation:{retry_generation}"
         )
         event_challenge = secrets.token_hex(32)
         authorization = self.keys.sign(
@@ -3240,7 +3310,7 @@ class AuthorityServiceCore:
                     != qualification_id
                     or retry_authorization.get("authorized_client_sid")
                     != client_sid
-                    or retry_authorization.get("retry_generation") != 2
+                    or retry_authorization.get("retry_generation") not in {2, 3}
                     or retry_authorization.get("required_authority_version")
                     != SERVICE_VERSION
                     or retry_authorization.get("required_host_version")
@@ -5445,9 +5515,13 @@ def _replacement_registration_id(
     failure_digest: str,
     request_identity_digest: str,
 ) -> str:
-    return "keeper-provider:codex:v1:" + hashlib.sha256(
+    match = re.fullmatch(r"keeper-provider:(codex|claude):v1:[0-9a-f]{32}", predecessor_id)
+    if match is None:
+        raise PermissionError("provider registration predecessor identity is invalid")
+    provider_id = match.group(1)
+    return f"keeper-provider:{provider_id}:v1:" + hashlib.sha256(
         (
-            "codex-subscription-registration-successor-v1\0"
+            f"{provider_id}-subscription-registration-successor-v1\0"
             + predecessor_id
             + "\0"
             + failure_digest
@@ -5547,7 +5621,10 @@ def _validated_registration_replacement_lineage(
             and value.get("required_authority_version") != SERVICE_VERSION
         )
         or value.get("expected_account_plan_type")
-        not in CODEX_ALLOWED_SUBSCRIPTION_PLANS
+        not in (
+            CODEX_ALLOWED_SUBSCRIPTION_PLANS
+            | CLAUDE_ALLOWED_SUBSCRIPTION_PLANS
+        )
     ):
         raise PermissionError("provider registration replacement lineage is malformed")
     for name in {
@@ -5561,15 +5638,20 @@ def _validated_registration_replacement_lineage(
         "request_identity_digest",
     }:
         _sha256_text(value.get(name), name.replace("_", " "))
+    predecessor_match = re.fullmatch(
+        r"keeper-provider:(codex|claude):v1:[0-9a-f]{32}",
+        str(value.get("predecessor_registration_id", "")),
+    )
+    successor_match = re.fullmatch(
+        r"keeper-provider:(codex|claude):v1:[0-9a-f]{32}",
+        str(value.get("successor_registration_id", "")),
+    )
     if (
         _positive_int(value.get("expected_executable_size"), "provider executable size")
         <= 0
-        or not str(value.get("predecessor_registration_id", "")).startswith(
-            "keeper-provider:codex:v1:"
-        )
-        or not str(value.get("successor_registration_id", "")).startswith(
-            "keeper-provider:codex:v1:"
-        )
+        or predecessor_match is None
+        or successor_match is None
+        or predecessor_match.group(1) != successor_match.group(1)
         or value.get("predecessor_registration_id")
         == value.get("successor_registration_id")
     ):

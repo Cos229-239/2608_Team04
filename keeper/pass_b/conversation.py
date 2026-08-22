@@ -376,6 +376,23 @@ class DynamicWorkflowDesigner:
                 ("Produce", "IMPLEMENTER", "Create the deliverables", False),
             ),
         )
+        normalized_constraints = {
+            item.strip().casefold() for item in charter.constraints
+        }
+        if (
+            charter.project_type == "software"
+            and "no source writes" in normalized_constraints
+            and any("no-change codex author" in item.casefold() for item in charter.deliverables)
+            and any("claude" in item.casefold() and "review" in item.casefold() for item in charter.deliverables)
+        ):
+            selected = (
+                (
+                    "Validate with Codex",
+                    "IMPLEMENTER",
+                    "Produce the approved no-change validation evidence",
+                    True,
+                ),
+            )
         steps: list[WorkflowStepBlueprint] = []
         previous: str | None = None
         for title, role, objective, independent in selected:

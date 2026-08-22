@@ -29,6 +29,7 @@ from keeper.providers.codex_contract import (
     validate_codex_authenticode_binding,
     validate_executable_file_identity,
 )
+from keeper.providers.claude_contract import validate_claude_authenticode_binding
 
 
 _TOKEN_ALL_ACCESS = 0x000F01FF
@@ -1897,6 +1898,16 @@ def _token_user_sid(
     return int(user.User.Sid), buffer
 
 
+def _validate_provider_authenticode_binding(
+    provider_id: str, binding: object
+) -> dict[str, object]:
+    if provider_id == "codex":
+        return validate_codex_authenticode_binding(binding)
+    if provider_id == "claude":
+        return validate_claude_authenticode_binding(binding)
+    raise ValueError("provider executable identity is unsupported")
+
+
 def run_restricted_process(
     token: int,
     command: list[str],
@@ -1913,6 +1924,7 @@ def run_restricted_process(
     stdin_path: Path | None = None,
     integrity_level: str = "low",
     validated_executable_identity: dict[str, Any] | None = None,
+    executable_provider_id: str = "codex",
     active_process_limit: int | None = None,
     memory_bytes: int | None = None,
     stdout_bytes: int | None = None,
@@ -1965,8 +1977,9 @@ def run_restricted_process(
             file_identity = validate_executable_file_identity(
                 validated_executable_identity.get("file_identity")
             )
-            validate_codex_authenticode_binding(
-                validated_executable_identity.get("authenticode_binding")
+            _validate_provider_authenticode_binding(
+                executable_provider_id,
+                validated_executable_identity.get("authenticode_binding"),
             )
         except ValueError as error:
             raise PermissionError(

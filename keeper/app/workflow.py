@@ -1571,25 +1571,53 @@ class WorkflowCoordinator:
                 "reviewer": "executive_reviewer",
                 "post_repair_reviewer": "executive_post_repair_reviewer",
             }.get(str(event["role"]), str(event["role"]))
-            reservation = self.authority.reserve_attempt(
-                registration_id=str(registration["trusted_registration_id"]),
-                keeper_run_id=run_id,
-                task_id=str(event["task_id"]),
-                stage_id=str(event["stage_id"]),
-                role=authority_role,
-                attempt_number=int(latest_route["attempt_number"]),
-                provider_run_id=provider_run_id,
-                provider_instance_id=str(event["provider_instance_id"]),
-                evidence_path=str(event["evidence_path"]),
-                prompt_path=str(event["prompt_path"]),
-                stdout_path=str(event["stdout_path"]),
-                stderr_path=str(event["stderr_path"]),
-                workspace=str(event["workspace"]),
-                timeout_seconds=int(event["timeout_seconds"]),
-                reasoning_level=str(event["reasoning_level"]),
-                environment=provider_environment,
-                provider_input_required=False,
-            )
+            reservation_identity = {
+                **event,
+                "attempt_number": latest_route.get("attempt_number"),
+                "retry_parent": latest_route.get("retry_of"),
+                "reroute_authorization_id": reroute_authorization_id,
+                "stable_registration_digest": route.get(
+                    "stable_registration_digest"
+                ),
+                "stable_registration": route.get("stable_registration"),
+                "executable": route.get("executable"),
+                "executable_sha256": route.get("executable_sha256"),
+                "completion_challenge": None,
+                "authority_attempt_id": None,
+                "authority_launch_challenge": None,
+                "authority_role": authority_role,
+            }
+            try:
+                reservation = self.authority.reserve_attempt(
+                    registration_id=str(registration["trusted_registration_id"]),
+                    keeper_run_id=run_id,
+                    task_id=str(event["task_id"]),
+                    stage_id=str(event["stage_id"]),
+                    role=authority_role,
+                    attempt_number=int(latest_route["attempt_number"]),
+                    provider_run_id=provider_run_id,
+                    provider_instance_id=str(event["provider_instance_id"]),
+                    evidence_path=str(event["evidence_path"]),
+                    prompt_path=str(event["prompt_path"]),
+                    stdout_path=str(event["stdout_path"]),
+                    stderr_path=str(event["stderr_path"]),
+                    workspace=str(event["workspace"]),
+                    timeout_seconds=int(event["timeout_seconds"]),
+                    reasoning_level=str(event["reasoning_level"]),
+                    environment=provider_environment,
+                    provider_input_required=False,
+                )
+            except Exception as error:
+                executions.append(
+                    {
+                        **reservation_identity,
+                        "status": "RESERVATION_REJECTED",
+                        "failure_reason": str(error),
+                    }
+                )
+                record["provider_execution_attempts"] = executions
+                self.store.upsert("runs", run_id, record)
+                raise
             authority_attempt = reservation.get("attempt")
             authority_attempt_id = reservation.get("attempt_id")
             if not isinstance(authority_attempt, dict) or not isinstance(
@@ -1600,22 +1628,11 @@ class WorkflowCoordinator:
                 )
             executions.append(
                 {
-                    **event,
-                    "attempt_number": latest_route.get("attempt_number"),
-                    "retry_parent": latest_route.get("retry_of"),
-                    "reroute_authorization_id": reroute_authorization_id,
-                    "stable_registration_digest": route.get(
-                        "stable_registration_digest"
-                    ),
-                    "stable_registration": route.get("stable_registration"),
-                    "executable": route.get("executable"),
-                    "executable_sha256": route.get("executable_sha256"),
-                    "completion_challenge": None,
+                    **reservation_identity,
                     "authority_attempt_id": authority_attempt_id,
                     "authority_launch_challenge": authority_attempt.get(
                         "launch_challenge"
                     ),
-                    "authority_role": authority_role,
                     "status": "EXECUTION_RESERVED",
                 }
             )

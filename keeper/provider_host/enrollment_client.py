@@ -18,6 +18,7 @@ from keeper.executive.models import FounderApprovalChallenge
 from keeper.provider_host.bootstrap import ProviderHostBootstrap
 from keeper.provider_host.protocol import structured_digest
 from keeper.providers.codex_contract import CODEX_ALLOWED_SUBSCRIPTION_PLANS
+from keeper.providers.claude_contract import CLAUDE_ALLOWED_SUBSCRIPTION_PLANS
 
 
 _SYSTEM_PROJECT = "keeper-system:provider-host"
@@ -60,6 +61,7 @@ class EnrollmentAuthorityClient(Protocol):
         required_authority_version: str,
         required_host_version: str,
         founder_capability: dict[str, object],
+        retry_generation: int = 2,
     ) -> dict[str, Any]: ...
 
     def begin_provider_host_enrollment(
@@ -351,6 +353,12 @@ class ProviderHostEnrollmentClient:
             "legacy_authority_package_sha256": (
                 "19102c5ed7ad2a278c18d49284a8fbea0a189031d4ee4ddf55ed4687120e2211"
             ),
+            "legacy_authority_runtime_executable_sha256": (
+                "03168c01b7b7491423350e82c26fee71f35b43694d1319d3c668bda6903a0c38"
+            ),
+            "legacy_authority_runtime_peer_digest": (
+                "da25662c9921d468fc039fe1bcbde86be791570c66fa335f50c6d604bc381fbc"
+            ),
             "legacy_authority_version": "1.7.47",
             "legacy_host_executable_sha256": (
                 "e81327789faff88c187c007182268049fb81ca4974f02a0ba53e6618a1340fae"
@@ -414,6 +422,18 @@ class ProviderHostEnrollmentClient:
             if isinstance(request_binding, dict)
             else None
         )
+        provider_id = (
+            request_binding.get("provider_id")
+            if isinstance(request_binding, dict)
+            else None
+        )
+        allowed_plans = (
+            CODEX_ALLOWED_SUBSCRIPTION_PLANS
+            if provider_id == "codex"
+            else CLAUDE_ALLOWED_SUBSCRIPTION_PLANS
+            if provider_id == "claude"
+            else frozenset()
+        )
         if (
             record.get("service_state") != "REGISTRATION_FAILED"
             or record.get("attempt_generation") != 2
@@ -435,7 +455,7 @@ class ProviderHostEnrollmentClient:
                 for character in expected_account_identity_digest
             )
             or not isinstance(expected_account_plan_type, str)
-            or expected_account_plan_type not in CODEX_ALLOWED_SUBSCRIPTION_PLANS
+            or expected_account_plan_type not in allowed_plans
             or not isinstance(account_identity_discovery_digest, str)
             or len(account_identity_discovery_digest) != 64
             or any(
@@ -448,13 +468,14 @@ class ProviderHostEnrollmentClient:
             )
         diagnostics = self.authority.diagnostics()
         required_version = diagnostics.get("service_version")
-        if required_version != "1.7.50":
+        if required_version != "1.7.51":
             raise PermissionError(
-                "exhausted provider registration requires Keeper 1.7.50"
+                "exhausted provider registration requires Keeper 1.7.51"
             )
-        successor_id = "keeper-provider:codex:v1:" + hashlib.sha256(
+        assert isinstance(provider_id, str)
+        successor_id = f"keeper-provider:{provider_id}:v1:" + hashlib.sha256(
             (
-                "codex-subscription-registration-successor-v1\0"
+                f"{provider_id}-subscription-registration-successor-v1\0"
                 + registration_id
                 + "\0"
                 + failure_digest
@@ -520,11 +541,12 @@ class ProviderHostEnrollmentClient:
         registration_id: str,
         qualification_id: str,
         qualification_failure_digest: str,
+        retry_generation: int = 2,
     ) -> dict[str, Any]:
         required_version = self.authority.diagnostics().get("service_version")
-        if required_version != "1.7.50":
+        if required_version != "1.7.51":
             raise PermissionError(
-                "provider qualification retry requires Keeper 1.7.50"
+                "provider qualification retry requires Keeper 1.7.51"
             )
         binding = {
             "action": "AUTHORIZE_PROVIDER_QUALIFICATION_RETRY",
@@ -533,12 +555,12 @@ class ProviderHostEnrollmentClient:
             "registration_id": registration_id,
             "required_authority_version": required_version,
             "required_host_version": required_version,
-            "retry_generation": 2,
+            "retry_generation": retry_generation,
         }
         capability = self._founder_capability(
             action="AUTHORIZE_PROVIDER_QUALIFICATION_RETRY",
             action_digest=structured_digest(binding),
-            generation=2,
+            generation=retry_generation,
         )
         return self.authority.authorize_provider_qualification_retry(
             registration_id=registration_id,
@@ -547,6 +569,7 @@ class ProviderHostEnrollmentClient:
             required_authority_version=required_version,
             required_host_version=required_version,
             founder_capability=asdict(capability),
+            retry_generation=retry_generation,
         )
 
     def _founder_capability(

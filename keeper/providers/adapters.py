@@ -1322,18 +1322,22 @@ def _qualification_is_consistent(
     ):
         return False
     try:
+        unqualified = {
+            **registration,
+            "qualified_version": None,
+            "qualification_timestamp": None,
+            "qualification_method": "none",
+            "qualification_result": "not-qualified",
+            "registration_lifecycle": "REGISTERED_UNQUALIFIED",
+            "qualification_evidence_id": None,
+            "qualification_evidence_digest": None,
+            "configuration_digest": "",
+        }
+        unqualified["configuration_digest"] = _registration_configuration_digest(
+            unqualified
+        )
         expected = apply_protected_qualification(
-            {
-                **registration,
-                "qualified_version": None,
-                "qualification_timestamp": None,
-                "qualification_method": "none",
-                "qualification_result": "not-qualified",
-                "registration_lifecycle": "REGISTERED_UNQUALIFIED",
-                "qualification_evidence_id": None,
-                "qualification_evidence_digest": None,
-                "configuration_digest": "",
-            },
+            unqualified,
             evidence,
             authority_verifier=authority_verifier,
             expected_challenge=str(evidence["event_challenge"]),
