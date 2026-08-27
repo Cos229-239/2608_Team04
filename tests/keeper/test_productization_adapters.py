@@ -59,7 +59,21 @@ def test_claude_adapter_uses_argument_array_and_schema(tmp_path: Path) -> None:
     assert "--json-schema" in command
     assert command[-2:] == ["-p", "safe prompt"]
 
+def test_discovery_includes_gemini_provider() -> None:
+    providers = ProviderDiscovery(
+        {
+            "codex": "Z:/does-not-exist",
+            "claude": "Z:/does-not-exist",
+            "gemini": "Z:/does-not-exist",
+        }
+    ).discover()
 
+    gemini = next(item for item in providers if item.provider_id == "gemini")
+
+    assert gemini.display_name == "Gemini CLI command"
+    assert gemini.available is False
+    assert gemini.discovery_state == "unavailable"
+    
 def test_discovery_always_includes_available_mock() -> None:
     providers = ProviderDiscovery(
         {"codex": "Z:/does-not-exist", "claude": "Z:/does-not-exist"}

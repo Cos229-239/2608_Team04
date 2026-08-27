@@ -348,6 +348,12 @@ class ProviderDiscovery:
                 ("claude", "claude.exe"),
                 "implemented; not verified on this machine",
             ),
+            self._command(
+            "gemini",
+            "Gemini CLI command",
+            ("gemini", "gemini.cmd", "gemini.exe"),
+            "discovery implemented; execution adapter pending",
+            ),
             self._ollama(),
             ProviderDiagnostic(
                 "mock",
