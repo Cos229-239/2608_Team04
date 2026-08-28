@@ -129,8 +129,8 @@ def test_semantic_binding_rejects_forgery_duplicates_and_missing() -> None:
 def test_routing_enforces_independence_and_qwen_review() -> None:
     providers = [
         ProviderDiagnostic(
-            "ollama",
-            "Ollama",
+            "qwen",
+            "Qwen",
             True,
             "ollama",
             "1",
@@ -142,14 +142,14 @@ def test_routing_enforces_independence_and_qwen_review() -> None:
         ),
     ]
     decision = route_provider(
-        RoutingRequest("reviewer", "high", "security", frozenset({"ollama"}), True),
+        RoutingRequest("reviewer", "high", "security", frozenset({"qwen"}), True),
         providers,
     )
     assert decision.provider_id == "codex"
     with pytest.raises(RuntimeError, match="independent"):
         route_provider(
             RoutingRequest(
-                "reviewer", "high", "security", frozenset({"ollama", "codex"}), True
+                "reviewer", "high", "security", frozenset({"qwen", "codex"}), True
             ),
             providers,
         )

@@ -32,6 +32,7 @@ Exceptional states such as `BLOCKED`, `FAILED`, `PAUSED`, `CANCELLED`, and `RECO
 - Paid fallback and provider switching are never implicit.
 - A provider operation is uniquely identified, durably claimed, and recoverable across restart or lost response.
 - A prelaunch reservation synchronously rejected before Authority persistence can be reconciled only by an immediate authenticated exact-absence observation in that operation; every response-loss or restart uncertainty remains fenced.
+- A stale uncertain external execution can be locally abandoned only after a signed KeeperAuthority/Provider Host exact-attempt inactivity observation and an exact one-time Founder disposition. The approval binds every released workspace and write claim, preserves possible-effect accounting, consumes reserved usage, accepts no result, grants no retry, and remains globally visible until resolved.
 - External effects must be bounded, observable, and accounted before subsequent work is allowed.
 
 ## Supported environment

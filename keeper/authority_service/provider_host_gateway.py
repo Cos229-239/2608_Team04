@@ -713,6 +713,13 @@ class ProviderHostGateway:
             raise PermissionError("Provider Host status is invalid")
         return _validate_host_status(dict(result))
 
+    def recovery_barrier(self) -> dict[str, Any]:
+        result = self._rpc("recovery_barrier", {})
+        if not isinstance(result, dict):
+            raise PermissionError("Provider Host recovery barrier is invalid")
+        validated = _validate_host_status(dict(result), recovery_barrier=True)
+        return validated
+
     def reconcile_uncertain_launch(
         self, reconciliation: Mapping[str, Any]
     ) -> dict[str, Any]:
@@ -990,15 +997,20 @@ class ProviderHostGateway:
         }
 
 
-def _validate_host_status(value: dict[str, Any]) -> dict[str, Any]:
+def _validate_host_status(
+    value: dict[str, Any], *, recovery_barrier: bool = False
+) -> dict[str, Any]:
     journal = value.get("launch_journal")
-    if not isinstance(journal, dict) or set(journal) != {
+    expected_journal_fields = {
         "active_launch_count",
         "active_or_uncertain_launch_count",
         "launches",
         "summary_digest",
         "uncertain_launch_count",
-    }:
+    }
+    if recovery_barrier:
+        expected_journal_fields.add("recovery_barrier_generation")
+    if not isinstance(journal, dict) or set(journal) != expected_journal_fields:
         raise PermissionError("Provider Host launch journal is invalid")
     launches = journal.get("launches")
     active = journal.get("active_launch_count")
@@ -1018,6 +1030,14 @@ def _validate_host_status(value: dict[str, Any]) -> dict[str, Any]:
         or total != len(launches)
         or total != active + uncertain
         or journal.get("summary_digest") != structured_digest(launches)
+        or (
+            recovery_barrier
+            and (
+                isinstance(journal.get("recovery_barrier_generation"), bool)
+                or not isinstance(journal.get("recovery_barrier_generation"), int)
+                or int(journal["recovery_barrier_generation"]) < 1
+            )
+        )
     ):
         raise PermissionError("Provider Host launch journal accounting differs")
     fields = {

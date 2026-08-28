@@ -2238,7 +2238,7 @@ def _select_routes(
             str(stored.get("risk", "low")),
             "keeper",
             frozenset({author.provider_id}),
-            author.provider_id == "ollama",
+            author.provider_id == "qwen",
         ),
         real_diagnostics,
     )
@@ -2386,14 +2386,14 @@ def _adapter(
             raise RuntimeError("Authority Service client is unavailable")
         return AuthorityServiceProvider(authority_client, diagnostic.registration)
     if (
-        diagnostic.provider_id == "claude"
+        diagnostic.provider_id in {"claude", "gemini", "qwen"}
         and diagnostic.executable
         and diagnostic.registration
     ):
         if not isinstance(authority_client, AuthorityServiceClient):
             raise RuntimeError("Authority Service client is unavailable")
         return AuthorityServiceProvider(authority_client, diagnostic.registration)
-    if diagnostic.provider_id == "ollama":
+    if diagnostic.provider_id == "qwen":
         return OllamaProvider()
     if diagnostic.provider_id == "mock":
         return MockProvider(provider_name="mock")
@@ -2436,12 +2436,12 @@ def _routing_decision(
     executable_size = 0
     endpoint_identity = (
         "http://127.0.0.1:11434"
-        if diagnostic.provider_id == "ollama"
+        if diagnostic.provider_id == "qwen"
         else "local-process"
     )
     authentication_mode = (
         "external-cli-session"
-        if diagnostic.provider_id in {"codex", "claude"}
+        if diagnostic.provider_id in {"codex", "claude", "gemini", "qwen"}
         else "local-none"
     )
     capabilities = diagnostic.capabilities.to_dict() if hasattr(

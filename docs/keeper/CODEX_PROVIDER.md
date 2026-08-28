@@ -1,7 +1,7 @@
 # Codex subscription provider and Keeper Provider Host
 
 Keeper 1.0 supports the official standalone Windows Codex CLI as an
-authoring-only provider through KeeperAuthority 1.7.50, Authority protocol 7,
+authoring-only provider through KeeperAuthority 1.7.52, Authority protocol 7,
 schema 6, and the per-user `keeper-provider-host/1` protocol. The Provider Host
 is an unelevated execution deputy. It cannot register, qualify, reserve, approve,
 spend, change policy, or fabricate Authority state.
@@ -240,7 +240,7 @@ report that uncertainty instead of advertising a resumable terminal result;
 qualification cannot be automatically replayed.
 
 An Authority-terminalized `QUALIFICATION_FAILED` result is also never retried by
-the ordinary qualification endpoint. Keeper 1.7.50 adds one separate
+the ordinary qualification endpoint. Keeper 1.7.52 adds one separate
 Founder-authorized retry generation for the exact failed registration,
 qualification evidence digest, client SID, and matching Authority/Host release.
 The authorization is durably consumed before launch, the original failed
@@ -323,7 +323,7 @@ it without rewriting the original signature. Account, executable, client,
 predecessor, failure, and capability bindings remain exact throughout.
 
 If that one retry also reaches the exact terminal, zero-effect
-`REGISTRATION_FAILED` state, KeeperAuthority 1.7.50 permits one distinct
+`REGISTRATION_FAILED` state, KeeperAuthority 1.7.52 permits one distinct
 Founder-authorized `NEW_REGISTRATION_AFTER_EXHAUSTION` transition. The
 capability is bound to the generation-2 failure digest, unchanged Codex
 executable/client request identity, an exact sanitized account-identity digest

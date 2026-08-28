@@ -145,7 +145,7 @@ class KeeperApplication:
         qualifies, launches, or retries a provider.
         """
 
-        if provider_id not in {"codex", "claude"}:
+        if provider_id not in {"codex", "claude", "gemini", "qwen"}:
             raise PermissionError("provider projection identity is unsupported")
         if not registration_id.strip() or not qualification_id.strip():
             raise ValueError(
@@ -347,7 +347,10 @@ class KeeperApplication:
         authentication_policy: dict[str, Any] | None = None,
         usage_policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if provider_id not in {"codex", "claude"} or not authorizer.strip():
+        if (
+            provider_id not in {"codex", "claude", "gemini", "qwen"}
+            or not authorizer.strip()
+        ):
             raise PermissionError(
                 "provider registration requires a supported identity and authorizer"
             )
@@ -511,7 +514,8 @@ class KeeperApplication:
             "strongest",
             "codex",
             "claude",
-            "ollama",
+            "gemini",
+            "qwen",
         }
         if selected_policy not in allowed_policies:
             raise ValueError(f"unsupported provider policy: {selected_policy}")

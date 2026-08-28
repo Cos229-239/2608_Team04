@@ -1,11 +1,11 @@
 # Claude subscription reviewer provider
 
-Keeper 1.7.50 supports Claude Code as an opt-in, reviewer-only provider through
+Keeper 1.7.52 supports Claude Code as an opt-in, reviewer-only provider through
 the same KeeperAuthority and restricted Provider Host boundary used by the
 qualified Codex subscription provider. It does not use an Anthropic API key,
 API billing, paid fallback, account switching, or provider switching.
 
-Release 1.7.50 also binds the exact `claude` provider identity into the
+Release 1.7.52 also binds the exact `claude` provider identity into the
 provisional Host setup envelope. A pre-dispatch failure remains a single
 durable registration claim and resumes with the same registration, setup, and
 challenge identities after an Authority restart; recovery cannot create a

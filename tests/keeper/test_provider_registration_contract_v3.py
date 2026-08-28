@@ -77,7 +77,7 @@ def test_explicit_contract_persists_qualifies_and_reaches_executive(
     assert specialists[0].project_types == tuple(declarations["project_types"])
     assert specialists[0].effort_levels == tuple(declarations["effort_levels"])
     assert specialists[0].maximum_cost == 0.0
-    assert client.diagnostics()["service_version"] == "1.7.51"
+    assert client.diagnostics()["service_version"] == "1.7.52"
 
 
 def test_register_payload_requires_every_authority_field(tmp_path: Path) -> None:

@@ -21,8 +21,8 @@ class KeeperConfig:
         ("reviewer", "primary_reviewer"),
         ("repairer", "primary_repairer"),
         ("post_repair_reviewer", "primary_post_repair_reviewer"),
-        ("preliminary_reviewer", "ollama"),
-        ("documentation_reviewer", "ollama"),
+        ("preliminary_reviewer", "qwen"),
+        ("documentation_reviewer", "qwen"),
     )
     process_timeout_seconds: int = 1800
     maximum_repair_passes: int = 1
@@ -69,8 +69,8 @@ class KeeperConfig:
                         "reviewer": "primary_reviewer",
                         "repairer": "primary_repairer",
                         "post_repair_reviewer": "primary_post_repair_reviewer",
-                        "preliminary_reviewer": "ollama",
-                        "documentation_reviewer": "ollama",
+                        "preliminary_reviewer": "qwen",
+                        "documentation_reviewer": "qwen",
                     },
                 ).items()
             ),

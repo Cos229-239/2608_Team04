@@ -71,7 +71,9 @@ class MockOllamaClient:
         return self.response
 
 
-class OllamaProvider(AgentProvider):
+class QwenProvider(AgentProvider):
+    """Run the pinned Qwen model through a loopback-only Ollama transport."""
+
     def __init__(
         self,
         model: str = "qwen3-coder:30b",
@@ -79,7 +81,7 @@ class OllamaProvider(AgentProvider):
         client: OllamaClient | None = None,
     ) -> None:
         self.model = model
-        self.provider_name = model
+        self.provider_name = "qwen"
         self.instance_id = uuid.uuid4().hex
         self.endpoint = endpoint
         self.client = client or HttpOllamaClient()
@@ -115,3 +117,8 @@ class OllamaProvider(AgentProvider):
             request.stdout_path.write_text("", encoding="utf-8")
             request.stderr_path.write_text(str(error), encoding="utf-8")
             return ProcessResult(1, request.stdout_path, request.stderr_path)
+
+
+# Compatibility alias for persisted imports. Qwen is the supported provider;
+# Ollama is only its local transport and is no longer exposed as a provider.
+OllamaProvider = QwenProvider

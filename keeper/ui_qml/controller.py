@@ -9,7 +9,10 @@ from typing import Any, Callable, cast
 from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
 
 from keeper.app.service import KeeperApplication
+from keeper.executive.models import FounderApprovalChallenge
 from keeper.pass_b.application import PassBApplication
+from keeper.pass_b.enums import AssignmentState, AttemptState
+from keeper.pass_b.models import AssignmentRecord, AttemptRecord
 from keeper.ui_qml.composition import (
     ProductSetupController,
     desktop_pass_b_application,
@@ -239,6 +242,43 @@ class KeeperDesktopController(QObject):
         recoveries = [
             _public_record(item) for item in self.application.recover_runs()
         ]
+        uncertain_attempts = {
+            item.assignment_id: item
+            for item in self.pass_b.repository.list(AttemptRecord)
+            if item.state == AttemptState.UNCERTAIN
+            and item.uncertainty_kind
+            == "EXTERNAL_EXECUTION_OUTCOME_AMBIGUOUS"
+        }
+        uncertain_assignments = [
+            item
+            for item in self.pass_b.repository.list(AssignmentRecord)
+            if item.state == AssignmentState.UNCERTAIN
+            and item.assignment_id in uncertain_attempts
+        ]
+        pass_b_uncertain = [
+            _public_record(
+                {
+                    "id": item.assignment_id,
+                    "assignment_id": item.assignment_id,
+                    "attempt_id": uncertain_attempts[
+                        item.assignment_id
+                    ].attempt_id,
+                    "project_id": item.project_id,
+                    "workflow_id": item.workflow_id,
+                    "work_item_id": item.work_item_id,
+                    "provider_id": item.provider_id,
+                    "source": "pass_b_uncertain_execution",
+                    "status": "UNCERTAIN",
+                    "reason": (
+                        "External execution outcome remains possible. "
+                        "Founder disposition is required; no result or retry "
+                        "will be accepted."
+                    ),
+                }
+            )
+            for item in uncertain_assignments
+        ]
+        recoveries.extend(pass_b_uncertain)
         settings = self.application.store.get("settings", "application") or {}
         state = {
             "navigation": list(NAVIGATION),
@@ -312,7 +352,7 @@ class KeeperDesktopController(QObject):
                 "evidence": len(view.evidence_cards) + len(view.evidence_reference_cards),
                 "uncertain": sum(
                     1 for row in runs if str(row.get("status", "")).upper() == "UNCERTAIN"
-                ),
+                ) + len(pass_b_uncertain),
             },
         }
         return cast(dict[str, Any], _primitive(state))
@@ -452,6 +492,32 @@ class KeeperDesktopController(QObject):
             self._fail(f"Unsupported run action: {action}")
             return
         self._run(f"Run action completed: {action}", operation)
+
+    @Slot(str)
+    def resolveUncertainExecution(self, assignment_id: str) -> None:
+        def dispose() -> object:
+            request = (
+                self.pass_b.request_uncertain_execution_disposition_approval(
+                    assignment_id
+                )
+            )
+            challenge = FounderApprovalChallenge.from_dict(
+                cast(dict[str, Any], request["challenge"])
+            )
+            confirmed = self.pass_b.confirm_recovery_action_approval(
+                challenge
+            )
+            approval = cast(dict[str, Any], confirmed["approval"])
+            return self.pass_b.apply_uncertain_execution_disposition_approval(
+                assignment_id,
+                observation_digest=str(request["observation_digest"]),
+                approval_id=str(approval["approval_id"]),
+            )
+
+        self._run(
+            "Founder disposition recorded; possible external effect preserved",
+            dispose,
+        )
 
     @Slot(str)
     def revokeAuthorization(self, authorization_id: str) -> None:

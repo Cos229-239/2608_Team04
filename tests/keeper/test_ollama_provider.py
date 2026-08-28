@@ -51,7 +51,7 @@ def test_routing_never_falls_back() -> None:
 
 def test_disabled_local_model_cannot_be_final_reviewer() -> None:
     local = MockProvider(provider_name="qwen2.5-coder:14b")
-    router = ProviderRouter({"ollama": local}, {"reviewer": "ollama"})
+    router = ProviderRouter({"qwen": local}, {"reviewer": "qwen"})
     with pytest.raises(PermissionError, match="disabled"):
         router.for_role("reviewer")
 

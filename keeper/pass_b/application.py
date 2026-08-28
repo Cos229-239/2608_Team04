@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Callable, Protocol, cast
 
 from keeper.app.storage import KeeperStore, default_data_directory
 from keeper.executive.authority_gateway import (
@@ -118,6 +120,12 @@ class PassBApplication:
         _test_recovery_action_authority: (
             RecoveryActionAuthority | None
         ) = None,
+        _test_uncertain_execution_observer: (
+            Callable[[str], dict[str, object]] | None
+        ) = None,
+        _test_uncertain_execution_finalizer: (
+            Callable[[str, dict[str, object]], dict[str, object]] | None
+        ) = None,
     ) -> None:
         self.data_directory = (
             data_directory or default_data_directory()
@@ -202,6 +210,79 @@ class PassBApplication:
         else:
             recovery_action_authority = None
         self.recovery_action_authority = recovery_action_authority
+        if _test_uncertain_execution_observer is not None:
+            if _test_launch_authority is None:
+                raise TypeError(
+                    "test uncertainty observer requires test launch composition"
+                )
+            uncertain_execution_observer = _test_uncertain_execution_observer
+        elif authority_client is not None:
+            def uncertain_execution_observer(
+                authority_attempt_id: str,
+            ) -> dict[str, object]:
+                try:
+                    result = authority_client.observe_uncertain_provider_attempt(
+                        authority_attempt_id
+                    )
+                    observation = result.get("observation")
+                except PermissionError:
+                    durable = authority_client.query_state(
+                        "attempts", authority_attempt_id
+                    )
+                    disposition = durable.get("record")
+                    if not isinstance(disposition, dict):
+                        raise
+                    terminal = dict(disposition)
+                    state = terminal.pop("service_state", None)
+                    if (
+                        state != "FOUNDER_DISPOSITIONED"
+                        or not authority_client.verify(
+                            "uncertain-provider-attempt-disposition", terminal
+                        )
+                        or terminal.get("authority_attempt_id")
+                        != authority_attempt_id
+                    ):
+                        raise
+                    observation = terminal.get("inactivity_observation")
+                if (
+                    not isinstance(observation, dict)
+                    or not authority_client.verify(
+                        "uncertain-provider-attempt-observation", observation
+                    )
+                ):
+                    raise PermissionError(
+                        "Authority provider inactivity observation is invalid"
+                    )
+                return cast(dict[str, object], observation)
+        else:
+            uncertain_execution_observer = None
+        if _test_uncertain_execution_finalizer is not None:
+            if _test_launch_authority is None:
+                raise TypeError(
+                    "test uncertainty finalizer requires test launch composition"
+                )
+            uncertain_execution_finalizer = _test_uncertain_execution_finalizer
+        elif authority_client is not None:
+            def uncertain_execution_finalizer(
+                authority_attempt_id: str,
+                executive_recovery_receipt: dict[str, object],
+            ) -> dict[str, object]:
+                result = authority_client.finalize_uncertain_provider_attempt_disposition(
+                    authority_attempt_id, executive_recovery_receipt
+                )
+                disposition = result.get("disposition")
+                if (
+                    not isinstance(disposition, dict)
+                    or not authority_client.verify(
+                        "uncertain-provider-attempt-disposition", disposition
+                    )
+                ):
+                    raise PermissionError(
+                        "Authority uncertain execution disposition is invalid"
+                    )
+                return cast(dict[str, object], disposition)
+        else:
+            uncertain_execution_finalizer = None
         self.orchestration = OrchestrationService(
             self.repository,
             launch_authority=launch_authority,
@@ -209,6 +290,8 @@ class PassBApplication:
             usage_reset_verifier=usage_reset_verifier,
             project_status=self.project_status,
             recovery_action_authority=recovery_action_authority,
+            uncertain_execution_observer=uncertain_execution_observer,
+            uncertain_execution_finalizer=uncertain_execution_finalizer,
         )
         self.conversation = DurableConversationService(
             self.repository, self.executive
@@ -250,8 +333,35 @@ class PassBApplication:
             AuthorityAttemptReservation | None
         ) = None,
         recovery_action_authority: RecoveryActionAuthority | None = None,
+        uncertain_execution_observer: (
+            Callable[[str], dict[str, object]] | None
+        ) = None,
+        uncertain_execution_finalizer: (
+            Callable[[str, dict[str, object]], dict[str, object]] | None
+        ) = None,
     ) -> PassBApplication:
         """Build an explicitly non-production deterministic composition."""
+
+        recovery_generation = 0
+
+        def default_uncertain_execution_observer(
+            authority_attempt_id: str,
+        ) -> dict[str, object]:
+            nonlocal recovery_generation
+            recovery_generation += 1
+            return {
+                "schema_version": 1,
+                "kind": "uncertain_provider_attempt_observation",
+                "authority_attempt_id": authority_attempt_id,
+                "host_id": "test-provider-host",
+                "enrollment_id": "test-provider-host-enrollment",
+                "enrollment_generation": 1,
+                "launch_id": f"test-launch:{authority_attempt_id}",
+                "recovery_barrier_generation": recovery_generation,
+                "disposition_readiness": "EXACT_ATTEMPT_INACTIVE",
+                "launch_state": "ABSENT_FROM_ACTIVE_OR_UNCERTAIN_JOURNAL",
+                "composition": "TEST_AUTHORITY",
+            }
 
         return cls(
             data_directory,
@@ -260,6 +370,50 @@ class PassBApplication:
             _test_launch_authority=launch_authority,
             _test_authority_reservation=authority_reservation,
             _test_recovery_action_authority=recovery_action_authority,
+            _test_uncertain_execution_observer=(
+                uncertain_execution_observer
+                or default_uncertain_execution_observer
+            ),
+            _test_uncertain_execution_finalizer=(
+                uncertain_execution_finalizer
+                or (
+                    lambda authority_attempt_id, executive_receipt: {
+                        "schema_version": 1,
+                        "kind": "uncertain_provider_attempt_disposition",
+                        "authority_attempt_id": authority_attempt_id,
+                        "project_id": executive_receipt["project_id"],
+                        "charter_id": executive_receipt["execution_charter_id"],
+                        "charter_revision": executive_receipt[
+                            "execution_charter_revision"
+                        ],
+                        "approval_charter_id": executive_receipt["charter_id"],
+                        "approval_charter_revision": executive_receipt[
+                            "charter_revision"
+                        ],
+                        "assignment_id": executive_receipt["assignment_id"],
+                        "pass_b_attempt_id": executive_receipt[
+                            "pass_b_attempt_id"
+                        ],
+                        "action_id": executive_receipt["action_id"],
+                        "action_digest": executive_receipt["action_digest"],
+                        "approval_id": executive_receipt["approval_id"],
+                        "approval_event_id": executive_receipt[
+                            "approval_event_id"
+                        ],
+                        "observation_digest": executive_receipt[
+                            "observation_digest"
+                        ],
+                        "terminal_disposition": (
+                            "FOUNDER_ABANDONED_UNCERTAIN_EXTERNAL_EXECUTION"
+                        ),
+                        "possible_external_effect_preserved": True,
+                        "result_accepted": False,
+                        "retry_authorized": False,
+                        "usage_disposition": "CONSUME_UPPER_BOUND",
+                        "composition": "TEST_AUTHORITY",
+                    }
+                )
+            ),
         )
 
     def request_uncertain_cancellation_approval(
@@ -303,6 +457,12 @@ class PassBApplication:
         self,
         challenge: FounderApprovalChallenge,
     ) -> dict[str, Any]:
+        return self.confirm_recovery_action_approval(challenge)
+
+    def confirm_recovery_action_approval(
+        self,
+        challenge: FounderApprovalChallenge,
+    ) -> dict[str, Any]:
         authority = self.recovery_action_authority
         if (
             authority is None
@@ -330,6 +490,84 @@ class PassBApplication:
         approval_id: str,
     ) -> dict[str, Any]:
         attempt = self.orchestration.reconcile_uncertain_cancellation(
+            assignment_id,
+            observation_digest=observation_digest,
+            approval_id=approval_id,
+        )
+        return attempt.to_dict()
+
+    def request_uncertain_execution_disposition_approval(
+        self, assignment_id: str
+    ) -> dict[str, Any]:
+        authority = self.recovery_action_authority
+        if authority is None or not hasattr(
+            authority, "request_action_approval"
+        ):
+            raise PermissionError(
+                "Founder recovery approval composition is unavailable"
+            )
+        observation = (
+            self.orchestration.uncertain_execution_disposition_observation(
+                assignment_id
+            )
+        )
+        observation_digest = hashlib.sha256(
+            json.dumps(
+                observation, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        action = self.orchestration.uncertain_execution_disposition_action(
+            assignment_id,
+            observation_digest=observation_digest,
+            observation=observation,
+        )
+        status = self.project_status(str(observation["project_id"]))
+        active_charter = dict(status.get("active_charter") or {})
+        charter_id = active_charter.get("charter_id")
+        if not isinstance(charter_id, str) or not charter_id:
+            raise PermissionError(
+                "current charter is unavailable for Founder disposition"
+            )
+        approval_authority = cast(Any, authority)
+        challenge = approval_authority.request_action_approval(
+            action,
+            charter_id=charter_id,
+            scope=action.scope,
+            limits={
+                "action_id": action.action_id,
+                "assignment_id": assignment_id,
+                "attempt_id": observation["attempt_id"],
+                "authority_attempt_id": observation[
+                    "authority_attempt_id"
+                ],
+                "execution_charter_id": observation["charter_id"],
+                "execution_charter_revision": observation["charter_revision"],
+                "observation_digest": observation_digest,
+                "approved_inactivity_observation": observation[
+                    "inactivity_observation"
+                ],
+                "approved_inactivity_observation_digest": observation[
+                    "inactivity_observation_digest"
+                ],
+                "possible_external_effect": True,
+                "retry_authorized": False,
+            },
+        )
+        return {
+            "action": action.to_dict(),
+            "challenge": challenge.to_dict(),
+            "observation": observation,
+            "observation_digest": observation_digest,
+        }
+
+    def apply_uncertain_execution_disposition_approval(
+        self,
+        assignment_id: str,
+        *,
+        observation_digest: str,
+        approval_id: str,
+    ) -> dict[str, Any]:
+        attempt = self.orchestration.apply_uncertain_execution_disposition(
             assignment_id,
             observation_digest=observation_digest,
             approval_id=approval_id,

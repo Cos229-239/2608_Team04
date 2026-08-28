@@ -921,7 +921,8 @@ class KeeperProductDesktop:
         self.ttk.Combobox(
             fields, textvariable=provider_policy,
             values=(
-                "automatic", "local-only", "strongest", "ollama",
+                "automatic", "local-only", "strongest", "codex", "claude",
+                "gemini", "qwen",
             ),
             state="readonly",
         ).pack(fill="x", pady=(2, 8))

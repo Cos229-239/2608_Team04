@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from keeper.authority_service.client import AuthorityServiceClient
+from keeper.authority_service import service_install
 from keeper.authority_service.core import AuthorityServiceCore
 from keeper.authority_service.protocol import Operation, Request
 from keeper.authority_service.provenance import (
@@ -31,6 +32,31 @@ _PROVIDER_SID = "S-1-5-21-2000"
 _SERVICE_ACCOUNT = r"NT SERVICE\KeeperAuthority"
 _PROVIDER_ACCOUNT = r".\KeeperProvider"
 _SOURCE_COMMIT = "a" * 40
+
+
+def test_release_source_identity_supports_fresh_machine_install(tmp_path: Path) -> None:
+    (tmp_path / "keeper-release-source.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_commit": _SOURCE_COMMIT,
+                "source_tree": "b" * 40,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert service_install._git_head(tmp_path) == _SOURCE_COMMIT
+
+
+def test_release_source_identity_fails_closed_when_malformed(tmp_path: Path) -> None:
+    (tmp_path / "keeper-release-source.json").write_text(
+        '{"schema_version":1,"source_commit":"not-a-commit","source_tree":"bad"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PermissionError, match="release source identity"):
+        service_install._git_head(tmp_path)
 
 
 def _installation(

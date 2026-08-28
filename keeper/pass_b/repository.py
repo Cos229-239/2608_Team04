@@ -46,6 +46,7 @@ from keeper.pass_b.models import (
     ResumeCheckpointRecord,
     ReviewRecord,
     RepositorySnapshotRecord,
+    UncertainExecutionDispositionRecord,
     UncertaintyReconciliationRecord,
     UsagePoolRecord,
     WorkflowRecord,
@@ -3486,6 +3487,258 @@ class PassBRepository:
                 record.reconciled_at,
             )
         return updated_attempt
+
+    def apply_uncertain_execution_disposition(
+        self,
+        record: UncertainExecutionDispositionRecord,
+    ) -> AttemptRecord:
+        """Apply one exact Founder disposition without accepting or retrying work."""
+
+        with self.store.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            attempt = self._get(connection, AttemptRecord, record.attempt_id)
+            assignment = self._get(
+                connection, AssignmentRecord, record.assignment_id
+            )
+            work_item = self._get(
+                connection, WorkItemRecord, record.work_item_id
+            )
+            workflow = self._get(
+                connection, WorkflowRecord, record.workflow_id
+            )
+            _validate_assignment_binding(workflow, work_item, assignment)
+            session = self._get(
+                connection, ProviderSessionRecord, assignment.session_id
+            )
+            workspaces = [
+                self._decode(WorkspaceReservationRecord, row)
+                for row in connection.execute(
+                    "SELECT payload,payload_hash FROM pass_b_records "
+                    "WHERE kind=? AND state='UNCERTAIN'",
+                    (WorkspaceReservationRecord.KIND,),
+                ).fetchall()
+            ]
+            workspaces = [
+                item
+                for item in workspaces
+                if item.assignment_id == assignment.assignment_id
+            ]
+            writes = sorted(
+                (
+                    self._decode(WriteReservationRecord, row)
+                    for row in connection.execute(
+                        "SELECT payload,payload_hash FROM pass_b_records "
+                        "WHERE kind=? AND state='UNCERTAIN'",
+                        (WriteReservationRecord.KIND,),
+                    ).fetchall()
+                ),
+                key=lambda item: item.write_reservation_id,
+            )
+            writes = [
+                item
+                for item in writes
+                if item.assignment_id == assignment.assignment_id
+            ]
+            write_digests = tuple(
+                hashlib.sha256(
+                    json.dumps(
+                        item.to_dict(),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                for item in writes
+            )
+            write_claims = tuple(
+                (str(row["scope_key"]), str(row["reservation_id"]))
+                for row in connection.execute(
+                    "SELECT scope_key,reservation_id "
+                    "FROM pass_b_write_claims "
+                    "WHERE assignment_id=? AND state='UNCERTAIN' "
+                    "ORDER BY scope_key",
+                    (assignment.assignment_id,),
+                ).fetchall()
+            )
+            expected_write_claims = tuple(
+                sorted(
+                    (scope_key, item.workspace_reservation_id)
+                    for item in writes
+                    for scope_key in item.scope_keys
+                )
+            )
+            existing = connection.execute(
+                "SELECT 1 FROM pass_b_records WHERE kind=? AND id=?",
+                (
+                    UncertainExecutionDispositionRecord.KIND,
+                    record.disposition_id,
+                ),
+            ).fetchone()
+            launch_claim = connection.execute(
+                "SELECT state,authority_attempt_id FROM pass_b_launch_claims "
+                "WHERE attempt_id=? AND assignment_id=?",
+                (attempt.attempt_id, assignment.assignment_id),
+            ).fetchone()
+            usage_rows = connection.execute(
+                "SELECT reservation_id,pool_id,amount "
+                "FROM pass_b_usage_reservations "
+                "WHERE assignment_id=? AND state='ACTIVE'",
+                (assignment.assignment_id,),
+            ).fetchall()
+            if (
+                existing is not None
+                or attempt.assignment_id != assignment.assignment_id
+                or attempt.state != AttemptState.UNCERTAIN
+                or assignment.state != AssignmentState.UNCERTAIN
+                or attempt.uncertainty_kind
+                != "EXTERNAL_EXECUTION_OUTCOME_AMBIGUOUS"
+                or not attempt.session_slot_claimed
+                or session.active_assignments < 1
+                or len(workspaces) != 1
+                or workspaces[0].workspace_reservation_id
+                != attempt.workspace_reservation_id
+                or record.workspace_reservation_ids
+                != (workspaces[0].workspace_reservation_id,)
+                or record.write_reservation_ids
+                != tuple(item.write_reservation_id for item in writes)
+                or record.write_reservation_digests != write_digests
+                or write_claims != expected_write_claims
+                or record.project_id != assignment.project_id
+                or record.charter_id != assignment.charter_id
+                or record.charter_revision != assignment.charter_revision
+                or record.workflow_id != assignment.workflow_id
+                or record.work_item_id != assignment.work_item_id
+                or record.provider_id != assignment.provider_id
+                or record.account_id != assignment.account_id
+                or record.session_id != assignment.session_id
+                or record.model_id != assignment.model_id
+                or record.authority_attempt_id != attempt.authority_attempt_id
+                or record.launch_token != attempt.launch_token
+                or record.external_execution_id != attempt.external_execution_id
+                or record.approval_charter_revision < record.charter_revision
+                or len(usage_rows) != 1
+                or record.usage_reservation_id
+                != str(usage_rows[0]["reservation_id"])
+                or record.usage_pool_id != str(usage_rows[0]["pool_id"])
+                or record.usage_amount != float(usage_rows[0]["amount"])
+                or launch_claim is None
+                or str(launch_claim["state"]) != AttemptState.UNCERTAIN
+                or str(launch_claim["authority_attempt_id"])
+                != attempt.authority_attempt_id
+                or record.authority_disposition.get("pass_b_attempt_id")
+                != attempt.attempt_id
+                or record.authority_disposition.get("assignment_id")
+                != assignment.assignment_id
+            ):
+                raise PermissionError(
+                    "uncertain execution disposition binding is invalid"
+                )
+
+            self._insert(connection, record)
+            self._replace(
+                connection,
+                replace(
+                    attempt,
+                    state=AttemptState.FAILED,
+                    finished_at=record.disposed_at,
+                    last_error=(
+                        "Founder disposition preserved a possible external "
+                        "effect; no result was accepted and no retry was authorized"
+                    ),
+                    session_slot_claimed=False,
+                    uncertainty_kind=None,
+                    updated_at=record.disposed_at,
+                    revision=attempt.revision + 1,
+                ),
+                attempt.revision,
+            )
+            self._replace(
+                connection,
+                replace(
+                    assignment,
+                    state=AssignmentState.CANCELED,
+                    updated_at=record.disposed_at,
+                    revision=assignment.revision + 1,
+                ),
+                assignment.revision,
+            )
+            self._replace(
+                connection,
+                replace(
+                    work_item,
+                    state=WorkItemState.BLOCKED,
+                    updated_at=record.disposed_at,
+                    revision=work_item.revision + 1,
+                ),
+                work_item.revision,
+            )
+            remaining = max(0, session.active_assignments - 1)
+            self._replace(
+                connection,
+                replace(
+                    session,
+                    active_assignments=remaining,
+                    state=(
+                        ProviderSessionState.BUSY
+                        if remaining >= session.concurrency_limit
+                        else ProviderSessionState.READY
+                    ),
+                    last_seen_at=record.disposed_at,
+                    updated_at=record.disposed_at,
+                    revision=session.revision + 1,
+                ),
+                session.revision,
+            )
+            for workspace in workspaces:
+                self._replace(
+                    connection,
+                    replace(
+                        workspace,
+                        state=ReservationState.RELEASED,
+                        updated_at=record.disposed_at,
+                        revision=workspace.revision + 1,
+                    ),
+                    workspace.revision,
+                )
+            for write in writes:
+                self._replace(
+                    connection,
+                    replace(
+                        write,
+                        state=ReservationState.RELEASED,
+                        updated_at=record.disposed_at,
+                        revision=write.revision + 1,
+                    ),
+                    write.revision,
+                )
+            self._consume_usage(
+                connection, assignment.assignment_id, record.disposed_at
+            )
+            cursor = connection.execute(
+                "UPDATE pass_b_launch_claims SET state='FAILED',updated_at=? "
+                "WHERE attempt_id=? AND assignment_id=? "
+                "AND authority_attempt_id=? AND state='UNCERTAIN'",
+                (
+                    record.disposed_at,
+                    attempt.attempt_id,
+                    assignment.assignment_id,
+                    attempt.authority_attempt_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise PermissionError(
+                    "uncertain execution launch claim changed concurrently"
+                )
+            connection.execute(
+                "UPDATE pass_b_workspace_claims SET state='RELEASED' "
+                "WHERE assignment_id=? AND state='UNCERTAIN'",
+                (assignment.assignment_id,),
+            )
+            connection.execute(
+                "UPDATE pass_b_write_claims SET state='RELEASED' "
+                "WHERE assignment_id=? AND state='UNCERTAIN'",
+                (assignment.assignment_id,),
+            )
+        return self.get(AttemptRecord, record.attempt_id)
 
     def complete_cancellation(
         self, attempt_id: str, canceled_at: str

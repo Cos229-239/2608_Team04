@@ -441,6 +441,27 @@ class AuthorityServiceClient:
     def query_state(self, kind: str, identifier: str) -> dict[str, Any]:
         return self.request(Operation.QUERY_STATE, {"kind": kind, "id": identifier})
 
+    def observe_uncertain_provider_attempt(
+        self, attempt_id: str
+    ) -> dict[str, Any]:
+        return self.request(
+            Operation.OBSERVE_UNCERTAIN_PROVIDER_ATTEMPT,
+            {"attempt_id": attempt_id},
+        )
+
+    def finalize_uncertain_provider_attempt_disposition(
+        self,
+        attempt_id: str,
+        executive_recovery_receipt: dict[str, object],
+    ) -> dict[str, Any]:
+        return self.request(
+            Operation.FINALIZE_UNCERTAIN_PROVIDER_ATTEMPT_DISPOSITION,
+            {
+                "attempt_id": attempt_id,
+                "executive_recovery_receipt": executive_recovery_receipt,
+            },
+        )
+
     def reconcile_executive_restore(self, **identity: Any) -> dict[str, Any]:
         return self.request(
             Operation.RECONCILE_EXECUTIVE_RESTORE, dict(identity)

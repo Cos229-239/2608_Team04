@@ -347,6 +347,41 @@ def _provider(executable: Path) -> ProviderBinding:
     )
 
 
+def test_recovery_barrier_is_monotonic_and_rejects_live_worker(
+    tmp_path: Path,
+) -> None:
+    profile, _, _, executable = _paths(tmp_path)
+    binding = UserBinding("S-1-5-21-1000", 1, str(profile.resolve()))
+    runtime = KeeperProviderHost(
+        identity=HostIdentity("host-test", "authority-test", binding),
+        observed_binding=lambda: binding,
+        authority_verifier=AUTHORITY,
+        host_signer=HOST,
+        store=ProviderHostStore(tmp_path / "state" / "barrier.db"),
+        provider_binding=_provider(executable),
+        environment_attestation_key=b"environment-test-key",
+        setup_workspace_root=(
+            profile
+            / "AppData"
+            / "Local"
+            / "DarkSage"
+            / "KeeperProviderExchange"
+            / "setup"
+        ),
+    )
+    runtime.start()
+
+    first = cast(dict[str, object], runtime.recovery_barrier()["launch_journal"])
+    second = cast(dict[str, object], runtime.recovery_barrier()["launch_journal"])
+    assert first["recovery_barrier_generation"] == 1
+    assert second["recovery_barrier_generation"] == 2
+
+    runtime._active_cancel = threading.Event()  # noqa: SLF001 - race fixture
+    runtime._active_identity = ("attempt-live", "launch-live")  # noqa: SLF001
+    with pytest.raises(PermissionError, match="active work"):
+        runtime.recovery_barrier()
+
+
 def _launch(
     tmp_path: Path,
     provider: ProviderBinding,
@@ -992,7 +1027,7 @@ def test_gateway_reconciliation_binds_semantic_request_and_host_result(
         / "DarkSage"
         / "KeeperProviderHost"
         / "versions"
-        / "1.7.51"
+        / "1.7.52"
         / "KeeperProviderHost.exe"
     )
     host_process.parent.mkdir(parents=True)
@@ -1092,7 +1127,7 @@ def test_authority_gateway_environment_uses_handle_validated_bin_without_service
         / "DarkSage"
         / "KeeperProviderHost"
         / "versions"
-        / "1.7.51"
+        / "1.7.52"
         / "KeeperProviderHost.exe"
     )
     host_process.parent.mkdir(parents=True)

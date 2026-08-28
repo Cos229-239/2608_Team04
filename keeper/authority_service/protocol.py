@@ -67,6 +67,12 @@ class Operation(StrEnum):
     RECORD_PROVIDER_START = "record_provider_start"
     FINALIZE_COMPLETION = "finalize_completion"
     QUERY_STATE = "query_state"
+    OBSERVE_UNCERTAIN_PROVIDER_ATTEMPT = (
+        "observe_uncertain_provider_attempt"
+    )
+    FINALIZE_UNCERTAIN_PROVIDER_ATTEMPT_DISPOSITION = (
+        "finalize_uncertain_provider_attempt_disposition"
+    )
     VERIFY_EVIDENCE = "verify_evidence"
     RECONCILE_EXECUTIVE_RESTORE = "reconcile_executive_restore"
     BEGIN_EXECUTIVE_RESTORE_FENCE = "begin_executive_restore_fence"

@@ -468,9 +468,9 @@ class ProviderHostEnrollmentClient:
             )
         diagnostics = self.authority.diagnostics()
         required_version = diagnostics.get("service_version")
-        if required_version != "1.7.51":
+        if required_version != "1.7.52":
             raise PermissionError(
-                "exhausted provider registration requires Keeper 1.7.51"
+                "exhausted provider registration requires Keeper 1.7.52"
             )
         assert isinstance(provider_id, str)
         successor_id = f"keeper-provider:{provider_id}:v1:" + hashlib.sha256(
@@ -544,9 +544,9 @@ class ProviderHostEnrollmentClient:
         retry_generation: int = 2,
     ) -> dict[str, Any]:
         required_version = self.authority.diagnostics().get("service_version")
-        if required_version != "1.7.51":
+        if required_version != "1.7.52":
             raise PermissionError(
-                "provider qualification retry requires Keeper 1.7.51"
+                "provider qualification retry requires Keeper 1.7.52"
             )
         binding = {
             "action": "AUTHORIZE_PROVIDER_QUALIFICATION_RETRY",

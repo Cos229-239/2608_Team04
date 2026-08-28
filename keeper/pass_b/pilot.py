@@ -238,6 +238,29 @@ class PilotConversationExecutive:
             task_id=task_id,
         )
 
+    def issue_uncertain_execution_disposition_receipt(
+        self,
+        action: ProposedAction,
+        *,
+        approval_id: str,
+        authority_attempt_id: str,
+        pass_b_attempt_id: str,
+        assignment_id: str,
+        execution_charter_id: str,
+        execution_charter_revision: int,
+        observation_digest: str,
+    ) -> dict[str, object]:
+        return self.repository.issue_uncertain_execution_disposition_receipt(
+            action,
+            approval_id=approval_id,
+            authority_attempt_id=authority_attempt_id,
+            pass_b_attempt_id=pass_b_attempt_id,
+            assignment_id=assignment_id,
+            execution_charter_id=execution_charter_id,
+            execution_charter_revision=execution_charter_revision,
+            observation_digest=observation_digest,
+        )
+
     def approve_and_activate(
         self, challenge: FounderApprovalChallenge
     ) -> tuple[ProjectRecord, ProjectCharter]:

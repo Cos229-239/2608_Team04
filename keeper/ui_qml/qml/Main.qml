@@ -37,6 +37,9 @@ ApplicationWindow {
     property string findingSeverityFilter: "ALL"
     property string findingStatusFilter: "ALL"
     property string findingRepairFilter: "ALL"
+    property string reportAvailabilityFilter: "ALL"
+    property string providerHealthFilter: "ALL"
+    property string recoveryStatusFilter: "ALL"
     onSearchQueryChanged: taskPage = 0
     onWidthChanged: {
         if (width >= 1360 && narrowAssistantDialog.visible)
@@ -99,6 +102,30 @@ ApplicationWindow {
             return (findingSeverityFilter === "ALL" || severity === findingSeverityFilter)
                 && (findingStatusFilter === "ALL" || status === findingStatusFilter)
                 && (findingRepairFilter === "ALL" || (findingRepairFilter === "REPAIRED") === repaired)
+        })
+    }
+    function reportRows() {
+        return filtered(keeper.state.runs || []).filter(function(item) {
+            var exportable = !!item.evidence_manifest_digest
+            return reportAvailabilityFilter === "ALL"
+                || (reportAvailabilityFilter === "EXPORTABLE" && exportable)
+                || (reportAvailabilityFilter === "PENDING" && !exportable)
+        })
+    }
+    function providerRows() {
+        return filtered(keeper.state.providers || []).filter(function(item) {
+            var ready = String(item.health || "UNAVAILABLE").toUpperCase() === "READY"
+            return providerHealthFilter === "ALL"
+                || (providerHealthFilter === "READY" && ready)
+                || (providerHealthFilter === "NOT READY" && !ready)
+        })
+    }
+    function recoveryRows() {
+        return filtered(keeper.state.recoveries || []).filter(function(item) {
+            var uncertain = String(item.status || "UNKNOWN").toUpperCase() === "UNCERTAIN"
+            return recoveryStatusFilter === "ALL"
+                || (recoveryStatusFilter === "UNCERTAIN" && uncertain)
+                || (recoveryStatusFilter === "RESUMABLE" && !uncertain)
         })
     }
     function text(value, fallback) {
@@ -189,6 +216,7 @@ ApplicationWindow {
     }
 
     component MetricCard: Rectangle {
+        id: metricCard
         property string label: ""
         property string value: "0"
         property string route: "Overview"
@@ -215,20 +243,20 @@ ApplicationWindow {
             anchors.bottomMargin: 14
             spacing: 5
             Text {
-                text: parent.parent.label.toUpperCase()
+                text: metricCard.label.toUpperCase()
                 color: goldBright
                 font.pixelSize: 11
                 font.weight: Font.Bold
                 font.letterSpacing: 0.55
             }
             Text {
-                text: parent.parent.value
+                text: metricCard.value
                 color: textPrimary
                 font.pixelSize: 32
                 font.weight: Font.DemiBold
             }
             Text {
-                text: "Open " + parent.parent.label.toLowerCase() + "  →"
+                text: "Open " + metricCard.label.toLowerCase() + "  →"
                 color: textMuted
                 font.pixelSize: 10
             }
@@ -238,7 +266,7 @@ ApplicationWindow {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: keeper.navigate(parent.route)
+            onClicked: keeper.navigate(metricCard.route)
         }
     }
 
@@ -284,12 +312,13 @@ ApplicationWindow {
             anchors.centerIn: parent
             spacing: 10
             Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "◇"; color: gold; font.pixelSize: 34 }
-            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: title; color: textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
-            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: detail; color: textMuted; font.pixelSize: 13; wrapMode: Text.Wrap }
+            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: emptyRoot.title; color: textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
+            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: emptyRoot.detail; color: textMuted; font.pixelSize: 13; wrapMode: Text.Wrap }
         }
     }
 
     component PageHeader: RowLayout {
+        id: pageHeader
         property string title: ""
         property string subtitle: ""
         property string actionText: ""
@@ -300,19 +329,20 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.minimumWidth: 0
             spacing: 3
-            Text { Layout.fillWidth: true; text: parent.parent.title; color: textPrimary; font.pixelSize: 28; font.weight: Font.DemiBold; elide: Text.ElideRight }
-            MutedText { Layout.fillWidth: true; text: parent.parent.subtitle; elide: Text.ElideRight }
+            Text { Layout.fillWidth: true; text: pageHeader.title; color: textPrimary; font.pixelSize: 28; font.weight: Font.DemiBold; elide: Text.ElideRight }
+            MutedText { Layout.fillWidth: true; text: pageHeader.subtitle; elide: Text.ElideRight }
         }
         GoldButton {
-            objectName: "pageAction-" + parent.title
-            visible: actionText.length > 0
-            text: actionText
-            enabled: actionEnabled
-            onClicked: parent.action()
+            objectName: "pageAction-" + pageHeader.title
+            visible: pageHeader.actionText.length > 0
+            text: pageHeader.actionText
+            enabled: pageHeader.actionEnabled
+            onClicked: pageHeader.action()
         }
     }
 
     component RecordRow: Rectangle {
+        id: recordRow
         property string title: ""
         property string subtitle: ""
         property string state: ""
@@ -322,11 +352,11 @@ ApplicationWindow {
         border.color: "#292B2A"
         RowLayout {
             anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: 16
-            Rectangle { width: 4; height: 34; radius: 2; color: statusColor(parent.parent.state) }
+            Rectangle { Layout.preferredWidth: 4; Layout.preferredHeight: 34; radius: 2; color: statusColor(parent.parent.state) }
             ColumnLayout {
                 Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 3
-                BodyText { Layout.fillWidth: true; text: parent.parent.parent.title; font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 }
-                MutedText { Layout.fillWidth: true; text: parent.parent.parent.subtitle; elide: Text.ElideRight; maximumLineCount: 1 }
+                BodyText { Layout.fillWidth: true; text: recordRow.title; font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 }
+                MutedText { Layout.fillWidth: true; text: recordRow.subtitle; elide: Text.ElideRight; maximumLineCount: 1 }
             }
             StatusPill { visible: parent.parent.state.length > 0; value: parent.parent.state }
         }
@@ -365,7 +395,7 @@ ApplicationWindow {
                 }
                 Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "KEEPER"; color: goldBright; font.family: "Georgia"; font.pixelSize: 22; font.weight: Font.DemiBold; font.letterSpacing: 2; clip: true }
                 MutedText { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "EXECUTIVE CONTROL CENTER"; font.pixelSize: 8; color: gold; elide: Text.ElideRight; clip: true }
-                Rectangle { Layout.fillWidth: true; height: 1; color: border; Layout.topMargin: 8; Layout.bottomMargin: 4 }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border; Layout.topMargin: 8; Layout.bottomMargin: 4 }
                 ScrollView {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     clip: true
@@ -390,10 +420,10 @@ ApplicationWindow {
                         }
                     }
                 }
-                Rectangle { Layout.fillWidth: true; height: 1; color: border }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
                 RowLayout {
                     Layout.fillWidth: true
-                    Rectangle { width: 10; height: 10; radius: 5; color: statusColor(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "UNAVAILABLE") }
+                    Rectangle { Layout.preferredWidth: 10; Layout.preferredHeight: 10; radius: 5; color: statusColor(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "UNAVAILABLE") }
                     ColumnLayout {
                         Layout.fillWidth: true; spacing: 2
                         BodyText { text: "Keeper " + String(keeper.state.version || ""); font.pixelSize: 12 }
@@ -427,7 +457,7 @@ ApplicationWindow {
                         TrustItem { label: "AUTHORITY READY"; detail: "Every action verified" }
                         TrustItem { label: "AUDIT & RECEIPTS"; detail: "Nothing hidden" }
                     }
-                    Rectangle { visible: window.width >= 1430; width: 1; height: 34; color: border }
+                    Rectangle { visible: window.width >= 1430; Layout.preferredWidth: 1; Layout.preferredHeight: 34; color: border }
                     TextField {
                         objectName: "globalSearch"
                         Layout.preferredWidth: window.width >= 1500 ? 300 : 220
@@ -439,7 +469,7 @@ ApplicationWindow {
                         background: Rectangle { color: "#121414"; radius: 5; border.color: parent.activeFocus ? gold : "#3A3C3B" }
                     }
                     QuietButton { objectName: "refreshButton"; text: "Refresh"; onClicked: keeper.refresh() }
-                    Rectangle { width: 1; height: 34; color: border }
+                    Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 34; color: border }
                     ColumnLayout {
                         spacing: 0
                         BodyText { text: "Founder"; font.weight: Font.DemiBold; font.pixelSize: 13 }
@@ -496,7 +526,7 @@ ApplicationWindow {
                                         }
                                         RowLayout {
                                             spacing: 8
-                                            Rectangle { width: 8; height: 8; radius: 4; color: statusColor(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "UNAVAILABLE") }
+                                            Rectangle { Layout.preferredWidth: 8; Layout.preferredHeight: 8; radius: 4; color: statusColor(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "UNAVAILABLE") }
                                             Text { text: "KeeperAuthority " + window.text(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "", "UNAVAILABLE").toUpperCase(); color: statusColor(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "UNAVAILABLE"); font.pixelSize: 11; font.weight: Font.DemiBold }
                                             Text { text: "•"; color: textMuted; font.pixelSize: 11 }
                                             MutedText { text: (keeper.state.counts ? keeper.state.counts.uncertain : 0) + " uncertain outcome(s) preserved"; font.pixelSize: 11 }
@@ -529,10 +559,10 @@ ApplicationWindow {
                                 KPanel {
                                     Layout.fillWidth: true; Layout.preferredHeight: 320
                                     SectionTitle { text: "CURRENT PROJECT" }
-                                    BodyText { Layout.fillWidth: true; text: text(keeper.state.project ? keeper.state.project.title : "", "No active Keeper project"); font.pixelSize: 20; font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 }
-                                    StatusPill { value: text(keeper.state.project ? keeper.state.project.status : "", "NOT_STARTED") }
+                                    BodyText { Layout.fillWidth: true; text: window.text(keeper.state.project ? keeper.state.project.title : "", "No active Keeper project"); font.pixelSize: 20; font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 }
+                                    StatusPill { value: window.text(keeper.state.project ? keeper.state.project.status : "", "NOT_STARTED") }
                                     MutedText { text: keeper.state.project && keeper.state.project.charterRevision ? "Founder-approved charter revision " + keeper.state.project.charterRevision : "Describe a project in Keeper Assistant to create a proposed charter."; Layout.fillWidth: true }
-                                    Rectangle { Layout.fillWidth: true; height: 1; color: "#2B2D2C" }
+                                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#2B2D2C" }
                                     MutedText { text: "Every launch remains bound to the active charter and verified provider identity."; Layout.fillWidth: true }
                                     Item { Layout.fillHeight: true }
                                     GoldButton { text: keeper.state.project && keeper.state.project.approvalRequired ? "Review Founder Approval" : "Open Workflows"; onClicked: keeper.navigate(keeper.state.project && keeper.state.project.approvalRequired ? "Projects" : "Workflows") }
@@ -549,7 +579,7 @@ ApplicationWindow {
                                             RowLayout {
                                                 Layout.fillWidth: true
                                                 Layout.minimumHeight: 16
-                                                Rectangle { width: 8; height: 8; radius: 4; color: statusColor(modelData[1]) }
+                                                Rectangle { Layout.preferredWidth: 8; Layout.preferredHeight: 8; radius: 4; color: statusColor(modelData[1]) }
                                                 MutedText { text: modelData[0]; Layout.preferredWidth: 150; elide: Text.ElideRight; maximumLineCount: 1 }
                                                 BodyText { Layout.fillWidth: true; Layout.minimumWidth: 0; text: modelData[1]; font.pixelSize: 12; horizontalAlignment: Text.AlignRight; elide: Text.ElideMiddle; maximumLineCount: 1 }
                                             }
@@ -584,7 +614,7 @@ ApplicationWindow {
                                     model: filteredProjects()
                                     delegate: Rectangle {
                                         width: ListView.view.width; height: 64; color: mouse.containsMouse ? "#20211F" : "transparent"; border.color: "#30322F"
-                                        RowLayout { anchors.fill: parent; anchors.margins: 12; BodyText { Layout.fillWidth: true; text: text(modelData.title, modelData.project_id); font.weight: Font.DemiBold } StatusPill { value: text(modelData.state, "UNKNOWN") } }
+                                        RowLayout { anchors.fill: parent; anchors.margins: 12; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, modelData.project_id); font.weight: Font.DemiBold } StatusPill { value: window.text(modelData.state, "UNKNOWN") } }
                                         MouseArea { id: mouse; anchors.fill: parent; hoverEnabled: true; onClicked: keeper.selectProject(modelData.project_id) }
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No Keeper project yet"; detail: "Use Keeper Assistant to describe an outcome. Keeper will draft a charter for review." }
@@ -593,7 +623,7 @@ ApplicationWindow {
                             KPanel {
                                 Layout.fillWidth: true; Layout.preferredHeight: 330
                                 SectionTitle { text: "CURRENT CHARTER" }
-                                BodyText { text: text(keeper.state.project ? keeper.state.project.title : "", "No current charter"); font.pixelSize: 21; font.weight: Font.DemiBold }
+                                BodyText { text: window.text(keeper.state.project ? keeper.state.project.title : "", "No current charter"); font.pixelSize: 21; font.weight: Font.DemiBold }
                                 MutedText { text: keeper.state.project && keeper.state.project.charterRevision ? "Revision " + keeper.state.project.charterRevision : "A charter has not been approved." }
                                 BodyText { Layout.fillWidth: true; text: keeper.state.project && keeper.state.project.charter && keeper.state.project.charter.objective ? keeper.state.project.charter.objective : "The approved scope, exclusions, constraints, providers, and delegated envelope appear here." }
                                 Item { Layout.fillHeight: true }
@@ -693,7 +723,7 @@ ApplicationWindow {
 
                     Flickable {
                         contentWidth: width; contentHeight: authorizationColumn.implicitHeight + 48; clip: true
-                        ColumnLayout { id: authorizationColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16; PageHeader { title: "Authorizations"; subtitle: "Founder approvals, delegated grants, capability use, expiry, and revocation."; actionText: "+ New Authorization"; actionEnabled: false } MutedText { text: "New authority is created only through the supported Founder/charter flow."; color: warning } KPanel { Layout.fillWidth: true; Layout.preferredHeight: 510; SectionTitle { text: "DURABLE AUTHORITY RECORDS" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.authorizations || []); clip: true; delegate: Rectangle { width: ListView.view.width; height: 76; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"; RowLayout { anchors.fill: parent; anchors.margins: 14; ColumnLayout { Layout.fillWidth: true; BodyText { text: text(modelData.capability, modelData.id); font.weight: Font.DemiBold } MutedText { text: "Scope: " + text(modelData.scope, modelData.task_id) } } StatusPill { value: modelData.revoked_at ? "REVOKED" : (modelData.consumed_at ? "CONSUMED" : "ACTIVE") } QuietButton { text: "Revoke"; enabled: !modelData.revoked_at && !modelData.consumed_at; onClicked: keeper.revokeAuthorization(modelData.id) } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No authorization records"; detail: "Founder approvals and bounded delegated grants will be projected here." } } } }
+                        ColumnLayout { id: authorizationColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16; PageHeader { title: "Authorizations"; subtitle: "Founder approvals, delegated grants, capability use, expiry, and revocation."; actionText: "+ New Authorization"; actionEnabled: false } MutedText { text: "New authority is created only through the supported Founder/charter flow."; color: warning } KPanel { Layout.fillWidth: true; Layout.preferredHeight: 510; SectionTitle { text: "DURABLE AUTHORITY RECORDS" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.authorizations || []); clip: true; delegate: Rectangle { width: ListView.view.width; height: 76; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"; RowLayout { anchors.fill: parent; anchors.margins: 14; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.capability, modelData.id); font.weight: Font.DemiBold } MutedText { text: "Scope: " + window.text(modelData.scope, modelData.task_id) } } StatusPill { value: modelData.revoked_at ? "REVOKED" : (modelData.consumed_at ? "CONSUMED" : "ACTIVE") } QuietButton { text: "Revoke"; enabled: !modelData.revoked_at && !modelData.consumed_at; onClicked: keeper.revokeAuthorization(modelData.id) } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No authorization records"; detail: "Founder approvals and bounded delegated grants will be projected here." } } } }
                     }
 
                     Flickable {
@@ -737,8 +767,20 @@ ApplicationWindow {
                         ColumnLayout {
                             id: reportColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
                             PageHeader { title: "Reports"; subtitle: "Completion summaries derived from finalized protected evidence." }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                BodyText { text: "Availability"; font.weight: Font.DemiBold }
+                                ComboBox {
+                                    objectName: "reportAvailabilityFilter"
+                                    model: ["ALL", "EXPORTABLE", "PENDING"]
+                                    currentIndex: Math.max(0, model.indexOf(window.reportAvailabilityFilter))
+                                    onActivated: window.reportAvailabilityFilter = currentText
+                                }
+                                Item { Layout.fillWidth: true }
+                                MutedText { text: reportRows().length + " report(s)" }
+                            }
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "RUN REPORTS" }
-                                ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.runs || []); clip: true
+                                ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: reportRows(); clip: true
                                     delegate: Rectangle { width: ListView.view.width; height: 78; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
                                         RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.id, "Run"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Task " + window.text(modelData.task_id, "unknown") + (modelData.evidence_manifest_digest ? " • finalized evidence available" : " • report unavailable until finalization"); elide: Text.ElideMiddle; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { text: "Export"; enabled: !!modelData.evidence_manifest_digest; onClicked: { window.selectedRunId = modelData.id; reportFileDialog.open() } } }
                                     }
@@ -754,17 +796,29 @@ ApplicationWindow {
                             id: providerColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
                             PageHeader { title: "Providers"; subtitle: "Qualified providers, accounts, sessions, declared capabilities, and usage."; actionText: "+ Register Provider"; actionEnabled: false }
                             MutedText { text: "Provider registration and qualification remain explicit KeeperAuthority operations; this desktop does not fabricate production authority."; color: warning }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                BodyText { text: "Session health"; font.weight: Font.DemiBold }
+                                ComboBox {
+                                    objectName: "providerHealthFilter"
+                                    model: ["ALL", "READY", "NOT READY"]
+                                    currentIndex: Math.max(0, model.indexOf(window.providerHealthFilter))
+                                    onActivated: window.providerHealthFilter = currentText
+                                }
+                                Item { Layout.fillWidth: true }
+                                MutedText { text: providerRows().length + " session(s)" }
+                            }
                             KPanel {
                                 Layout.fillWidth: true; Layout.preferredHeight: 150
                                 SectionTitle { text: "KEEPER PROVIDER HOST" }
-                                RowLayout { Layout.fillWidth: true; StatusPill { value: keeper.state.providerHost ? text(keeper.state.providerHost.state, "NOT CONFIGURED") : "NOT CONFIGURED" } BodyText { Layout.fillWidth: true; text: keeper.state.providerHost ? "Protocol " + text(keeper.state.providerHost.protocol, "not reported") + " • provider " + text(keeper.state.providerHost.provider_state, "UNAVAILABLE") + " • execution " + text(keeper.state.providerHost.execution_state, "IDLE") + " • usage " + text(keeper.state.providerHost.usage_state, "UNAVAILABLE") : "Per-user execution deputy not configured" } }
+                                RowLayout { Layout.fillWidth: true; StatusPill { value: keeper.state.providerHost ? window.text(keeper.state.providerHost.state, "NOT CONFIGURED") : "NOT CONFIGURED" } BodyText { Layout.fillWidth: true; text: keeper.state.providerHost ? "Protocol " + window.text(keeper.state.providerHost.protocol, "not reported") + " • provider " + window.text(keeper.state.providerHost.provider_state, "UNAVAILABLE") + " • execution " + window.text(keeper.state.providerHost.execution_state, "IDLE") + " • usage " + window.text(keeper.state.providerHost.usage_state, "UNAVAILABLE") : "Per-user execution deputy not configured" } }
                                 MutedText { text: keeper.state.providerHost && keeper.state.providerHost.founder_action_required ? "Founder action required: " + keeper.state.providerHost.founder_action_required : "No Founder action required."; color: keeper.state.providerHost && keeper.state.providerHost.founder_action_required ? warning : success }
                             }
                             KPanel {
                                 Layout.fillWidth: true; Layout.preferredHeight: 390
                                 SectionTitle { text: "PROVIDER SESSIONS" }
                                 ListView {
-                                    Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.providers || []); clip: true
+                                    Layout.fillWidth: true; Layout.fillHeight: true; model: providerRows(); clip: true
                                     delegate: RecordRow {
                                         height: 82
                                         title: text(modelData.name, modelData.provider_id)
@@ -791,14 +845,26 @@ ApplicationWindow {
                         ColumnLayout {
                             id: recoveryColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
                             PageHeader { title: "Recovery"; subtitle: "Conservative crash, cancellation, uncertainty, and restore projections." }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                BodyText { text: "Action state"; font.weight: Font.DemiBold }
+                                ComboBox {
+                                    objectName: "recoveryStatusFilter"
+                                    model: ["ALL", "UNCERTAIN", "RESUMABLE"]
+                                    currentIndex: Math.max(0, model.indexOf(window.recoveryStatusFilter))
+                                    onActivated: window.recoveryStatusFilter = currentText
+                                }
+                                Item { Layout.fillWidth: true }
+                                MutedText { text: recoveryRows().length + " record(s)" }
+                            }
                             RowLayout { Layout.fillWidth: true; spacing: 14
                                 KPanel { Layout.fillWidth: true; Layout.preferredHeight: 170; SectionTitle { text: "UNCERTAIN" } Text { text: keeper.state.counts ? keeper.state.counts.uncertain : 0; color: warning; font.pixelSize: 36 } MutedText { text: "Non-idempotent uncertain work is never retried automatically." } }
                                 KPanel { Layout.fillWidth: true; Layout.preferredHeight: 170; SectionTitle { text: "KEEPERAUTHORITY" } StatusPill { value: keeper.state.diagnostics ? window.text(keeper.state.diagnostics.authorityStatus, "UNAVAILABLE") : "UNAVAILABLE" } MutedText { text: "Health is read-only and grants no execution authority." } }
                             }
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 380; SectionTitle { text: "RECOVERY RECORDS" }
-                                ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.recoveries || []); clip: true
+                                ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: recoveryRows(); clip: true
                                     delegate: Rectangle { width: ListView.view.width; height: 78; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
-                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, modelData.run_id); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.reason, "Recovery state requires inspection") } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { text: "Resume"; enabled: !!modelData.run_id && String(modelData.status || "").toUpperCase() !== "UNCERTAIN"; onClicked: keeper.runAction(modelData.run_id, "resume") } }
+                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, modelData.run_id); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.reason, "Recovery state requires inspection") } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { visible: String(modelData.source || "") === "pass_b_uncertain_execution"; text: "Founder disposition"; onClicked: keeper.resolveUncertainExecution(modelData.assignment_id) } GoldButton { visible: String(modelData.source || "") !== "pass_b_uncertain_execution"; text: "Resume"; enabled: !!modelData.run_id && String(modelData.status || "").toUpperCase() !== "UNCERTAIN"; onClicked: keeper.runAction(modelData.run_id, "resume") } }
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No recovery action required"; detail: "Keeper currently has no source-backed interrupted or uncertain run requiring attention." }
                                 }
@@ -843,12 +909,12 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.margins: 14; spacing: 10
                         RowLayout {
                             Layout.fillWidth: true
-                            Image { visible: assistantDrawer.opened; source: keeperIcon; sourceSize.width: 42; sourceSize.height: 42; width: 42; height: 42 }
+                            Image { visible: assistantDrawer.opened; source: keeperIcon; sourceSize.width: 42; sourceSize.height: 42; Layout.preferredWidth: 42; Layout.preferredHeight: 42 }
                             BodyText { visible: assistantDrawer.opened; Layout.fillWidth: true; text: "Keeper Assistant"; font.pixelSize: 17; font.weight: Font.DemiBold }
                             QuietButton { objectName: "assistantToggle"; text: assistantDrawer.opened ? "×" : "◀"; implicitWidth: 36; onClicked: { if (window.width < 1360) narrowAssistantDialog.open(); else assistantDrawer.userOpened = !assistantDrawer.userOpened } }
                         }
                         MutedText { visible: assistantDrawer.opened; Layout.fillWidth: true; text: "Describe outcomes, clarify charter scope, and follow durable workflow progress." }
-                        Rectangle { visible: assistantDrawer.opened; Layout.fillWidth: true; height: 1; color: border }
+                        Rectangle { visible: assistantDrawer.opened; Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
                         ListView {
                             visible: assistantDrawer.opened
                             Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 8
@@ -880,7 +946,7 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true; Layout.preferredHeight: 34
                 color: "#0A0C0B"; border.color: "#242625"
-                RowLayout { anchors.fill: parent; anchors.leftMargin: 18; anchors.rightMargin: 18; Rectangle { width: 8; height: 8; radius: 4; color: keeper.error ? danger : success } MutedText { Layout.fillWidth: true; text: keeper.error ? keeper.error : keeper.status; color: keeper.error ? danger : textMuted } MutedText { text: "Authority effect: governed by Keeper services" } }
+                RowLayout { anchors.fill: parent; anchors.leftMargin: 18; anchors.rightMargin: 18; Rectangle { Layout.preferredWidth: 8; Layout.preferredHeight: 8; radius: 4; color: keeper.error ? danger : success } MutedText { Layout.fillWidth: true; text: keeper.error ? keeper.error : keeper.status; color: keeper.error ? danger : textMuted } MutedText { text: "Authority effect: governed by Keeper services" } }
             }
         }
     }
@@ -933,7 +999,7 @@ ApplicationWindow {
             spacing: 14
             Image { Layout.alignment: Qt.AlignHCenter; source: keeperIcon; sourceSize.width: 100; sourceSize.height: 100; Layout.preferredWidth: 100; Layout.preferredHeight: 100 }
             Text { Layout.alignment: Qt.AlignHCenter; text: "Approve Project Charter"; color: goldBright; font.pixelSize: 23; font.weight: Font.Bold }
-            BodyText { Layout.fillWidth: true; text: text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
+            BodyText { Layout.fillWidth: true; text: window.text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
             MutedText { Layout.fillWidth: true; text: "Approval invokes the production Founder authenticator and binds only the exact displayed charter revision. Routine work inside that charter proceeds without repeated approval."; horizontalAlignment: Text.AlignHCenter }
             RowLayout { Layout.alignment: Qt.AlignHCenter; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; onClicked: { charterDialog.close(); keeper.approveCurrentCharter() } } }
         }
@@ -1003,12 +1069,12 @@ ApplicationWindow {
                 Layout.preferredWidth: 300; Layout.fillHeight: true
                 Image { Layout.alignment: Qt.AlignHCenter; source: keeperIcon; sourceSize.width: 170; sourceSize.height: 170; Layout.preferredWidth: 180; Layout.preferredHeight: 180 }
                 Text { Layout.alignment: Qt.AlignHCenter; text: "K E E P E R"; color: goldBright; font.pixelSize: 24; font.family: "Georgia" }
-                Rectangle { Layout.fillWidth: true; height: 1; color: border }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
                 Repeater {
                     model: ["Safety Boundaries", "Evidence Storage", "Repository / Project", "Provider Configuration", "Provider Validation", "KeeperAuthority Health", "Finish"]
                     RowLayout {
                         Layout.fillWidth: true
-                        Rectangle { width: 30; height: 30; radius: 15; color: index === keeper.setupIndex ? gold : (index < keeper.setupIndex ? "#315F36" : "#242625"); Text { anchors.centerIn: parent; text: index + 1; color: index === keeper.setupIndex ? "#080808" : textPrimary; font.weight: Font.Bold } }
+                        Rectangle { Layout.preferredWidth: 30; Layout.preferredHeight: 30; radius: 15; color: index === keeper.setupIndex ? gold : (index < keeper.setupIndex ? "#315F36" : "#242625"); Text { anchors.centerIn: parent; text: index + 1; color: index === keeper.setupIndex ? "#080808" : textPrimary; font.weight: Font.Bold } }
                         ColumnLayout { Layout.fillWidth: true; BodyText { text: modelData; color: index === keeper.setupIndex ? goldBright : textMuted; font.weight: index === keeper.setupIndex ? Font.DemiBold : Font.Normal } MutedText { visible: index === keeper.setupIndex; text: index === 0 ? "Define local safety boundaries" : index === 1 ? "Choose protected evidence storage" : index === 2 ? "Select an optional first repository" : index === 3 ? "Choose provider routing policy" : index === 4 ? "Review qualification requirements" : index === 5 ? "Verify read-only service status" : "Commit setup and open Keeper" } }
                     }
                 }
@@ -1018,19 +1084,19 @@ ApplicationWindow {
             KPanel {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 RowLayout { Layout.fillWidth: true; ColumnLayout { Layout.fillWidth: true; Text { text: "Welcome to Keeper"; color: goldBright; font.pixelSize: 32; font.weight: Font.DemiBold } MutedText { text: "Set up your local executive workflow in seven clear steps."; font.pixelSize: 15 } } Image { source: keeperIcon; sourceSize.width: 110; sourceSize.height: 110; Layout.preferredWidth: 110; Layout.preferredHeight: 110 } }
-                Rectangle { Layout.fillWidth: true; height: 1; color: border }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
                 StackLayout {
                     Layout.fillWidth: true; Layout.fillHeight: true; currentIndex: keeper.setupIndex
-                    ColumnLayout { SectionTitle { text: "STEP 1 OF 7 — SAFETY BOUNDARIES" } BodyText { text: "Keeper executes only inside an approved charter and durable authority envelope."; font.pixelSize: 20 } Repeater { model: ["Original repositories stay protected", "No paid fallback or spending", "No deployment, publication, or live trading", "Founder approval is required for authority expansion"]; RowLayout { Rectangle { width: 9; height: 9; radius: 5; color: success } BodyText { text: modelData } } } Item { Layout.fillHeight: true } }
+                    ColumnLayout { SectionTitle { text: "STEP 1 OF 7 — SAFETY BOUNDARIES" } BodyText { text: "Keeper executes only inside an approved charter and durable authority envelope."; font.pixelSize: 20 } Repeater { model: ["Original repositories stay protected", "No paid fallback or spending", "No deployment, publication, or live trading", "Founder approval is required for authority expansion"]; RowLayout { Rectangle { Layout.preferredWidth: 9; Layout.preferredHeight: 9; radius: 5; color: success } BodyText { text: modelData } } } Item { Layout.fillHeight: true } }
                     ColumnLayout { SectionTitle { text: "STEP 2 OF 7 — EVIDENCE STORAGE" } BodyText { text: "Choose where Keeper stores durable evidence and local state."; font.pixelSize: 20 } TextField { Layout.fillWidth: true; text: keeper.setupDraft.evidenceDirectory; readOnly: true; color: textPrimary; background: Rectangle { color: "#101212"; border.color: "#444444" } } QuietButton { objectName: "setupBrowseEvidence"; text: "Browse…"; onClicked: { folderDialog.mode = "evidence"; folderDialog.open() } } MutedText { text: "Keeper validates protected-tree boundaries and uses an exclusive random write probe before accepting this directory." } Item { Layout.fillHeight: true } }
                     ColumnLayout { SectionTitle { text: "STEP 3 OF 7 — FIRST PROJECT" } BodyText { text: "Optionally select a local Git repository. You can also start from a conversation later."; font.pixelSize: 20 } TextField { id: setupRepository; Layout.fillWidth: true; text: keeper.setupDraft.repository; color: textPrimary; placeholderText: "Optional local Git repository"; background: Rectangle { color: "#101212"; border.color: "#444444" } onTextChanged: keeper.setSetupValue("repository", text) } QuietButton { text: "Browse…"; onClicked: { folderDialog.mode = "setupRepository"; folderDialog.open() } } MutedText { text: "The original repository is recorded as protected. Provider work uses isolated workspaces." } Item { Layout.fillHeight: true } }
                     ColumnLayout { SectionTitle { text: "STEP 4 OF 7 — PROVIDER CONFIGURATION" } BodyText { text: "Choose a routing policy. Keeper never preselects a paid cloud provider."; font.pixelSize: 20 } ComboBox { id: setupPolicy; model: ["automatic", "local-only", "strongest"].concat(Object.keys(keeper.state.settings ? keeper.state.settings.providerPaths || {} : {})); currentIndex: Math.max(0, model.indexOf(keeper.setupDraft.providerPolicy)); onActivated: keeper.setSetupValue("providerPolicy", currentText) } MutedText { text: "Executable paths may be configured later in Settings. Registration and qualification remain separate supported Authority operations." } Item { Layout.fillHeight: true } }
                     ColumnLayout { SectionTitle { text: "STEP 5 OF 7 — PROVIDER VALIDATION" } BodyText { text: "No provider is treated as production-ready until KeeperAuthority validates its identity and declared capabilities."; font.pixelSize: 20 } StatusPill { value: (keeper.state.providers || []).length > 0 ? "AVAILABLE" : "NOT CONFIGURED" } MutedText { text: "It is safe to finish setup without a provider. Conversation, charter drafting, diagnostics, and local project organization remain available." } Item { Layout.fillHeight: true } }
                     ColumnLayout { SectionTitle { text: "STEP 6 OF 7 — KEEPERAUTHORITY HEALTH" } BodyText { text: "Keeper performs a read-only identity and protocol health check."; font.pixelSize: 20 } StatusPill { value: keeper.state.diagnostics ? text(keeper.state.diagnostics.authorityStatus, "UNAVAILABLE") : "UNAVAILABLE" } MutedText { text: "Unavailable service status does not crash setup and grants no execution authority. This wizard never starts, installs, restarts, or reconfigures the service." } Item { Layout.fillHeight: true } }
-                    ColumnLayout { SectionTitle { text: "STEP 7 OF 7 — READY" } BodyText { text: "Review the safety contract and open Keeper."; font.pixelSize: 20 } Repeater { model: ["Evidence directory validated", "Original repositories remain protected", "Provider state is honestly labeled", "KeeperAuthority health is read-only", "No network, paid-provider, deployment, or trading action occurred"]; RowLayout { Rectangle { width: 9; height: 9; radius: 5; color: success } BodyText { text: modelData } } } Item { Layout.fillHeight: true } }
+                    ColumnLayout { SectionTitle { text: "STEP 7 OF 7 — READY" } BodyText { text: "Review the safety contract and open Keeper."; font.pixelSize: 20 } Repeater { model: ["Evidence directory validated", "Original repositories remain protected", "Provider state is honestly labeled", "KeeperAuthority health is read-only", "No network, paid-provider, deployment, or trading action occurred"]; RowLayout { Rectangle { Layout.preferredWidth: 9; Layout.preferredHeight: 9; radius: 5; color: success } BodyText { text: modelData } } } Item { Layout.fillHeight: true } }
                 }
                 MutedText { visible: keeper.error.length > 0; Layout.fillWidth: true; text: keeper.error; color: danger; wrapMode: Text.Wrap }
-                Rectangle { Layout.fillWidth: true; height: 1; color: border }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
                 RowLayout { Layout.fillWidth: true; QuietButton { text: "Cancel setup"; onClicked: Qt.quit() } QuietButton { objectName: "setupBack"; text: "Back"; enabled: keeper.setupIndex > 0; onClicked: keeper.setupBack() } QuietButton { objectName: "setupRetry"; visible: keeper.error.length > 0; text: "Retry validation"; onClicked: keeper.setupNext() } Item { Layout.fillWidth: true } GoldButton { objectName: "setupNext"; visible: keeper.setupIndex < 6; text: "Next ›"; onClicked: keeper.setupNext() } GoldButton { objectName: "setupFinish"; visible: keeper.setupIndex === 6; text: "Finish & Open Keeper"; onClicked: keeper.finishSetup() } }
             }
         }

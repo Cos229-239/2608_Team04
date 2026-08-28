@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,8 @@ pytest.importorskip("PySide6")
 
 from keeper.app.service import KeeperApplication
 from keeper.pass_b.application import PassBApplication
+from keeper.pass_b.enums import AssignmentState, AttemptState
+from keeper.pass_b.models import AssignmentRecord, AttemptRecord
 from keeper.ui_qml.composition import ProductSetupController
 from keeper.ui_qml.controller import (
     KeeperDesktopController,
@@ -178,6 +181,68 @@ def test_qml_search_and_narrow_assistant_are_real_and_source_backed() -> None:
     assert "keeper.runAction(modelData.run_id, \"resume\")" in qml
     assert "keeper.exportRunReport(window.selectedRunId, selectedFile)" in qml
     assert "Math.min(460, Math.max(120, emptyRoot.width - 24))" in qml
+
+
+def test_recovery_projects_pass_b_uncertainty_and_founder_disposition(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product_snapshot = controller.pass_b.product_snapshot()
+    monkeypatch.setattr(
+        controller.pass_b, "product_snapshot", lambda: product_snapshot
+    )
+    original_list = controller.pass_b.repository.list
+    uncertain_assignment = SimpleNamespace(
+        assignment_id="uncertain-assignment-1",
+        project_id="project-1",
+        workflow_id="workflow-1",
+        work_item_id="work-item-1",
+        provider_id="codex",
+        state=AssignmentState.UNCERTAIN,
+    )
+    uncertain_attempt = SimpleNamespace(
+        assignment_id="uncertain-assignment-1",
+        attempt_id="uncertain-attempt-1",
+        state=AttemptState.UNCERTAIN,
+        uncertainty_kind="EXTERNAL_EXECUTION_OUTCOME_AMBIGUOUS",
+    )
+
+    def repository_list(record_type: type[object], **filters: object) -> list[object]:
+        if record_type is AssignmentRecord:
+            return [uncertain_assignment]
+        if record_type is AttemptRecord:
+            return [uncertain_attempt]
+        return original_list(record_type, **filters)
+
+    monkeypatch.setattr(controller.pass_b.repository, "list", repository_list)
+
+    controller.refresh()
+
+    state = controller.state_snapshot()
+    assert state["counts"]["uncertain"] == 1
+    assert len(state["recoveries"]) == 1
+    recovery = state["recoveries"][0]
+    assert recovery == {
+        "id": "uncertain-assignment-1",
+        "assignment_id": "uncertain-assignment-1",
+        "attempt_id": "uncertain-attempt-1",
+        "project_id": "project-1",
+        "workflow_id": "workflow-1",
+        "work_item_id": "work-item-1",
+        "provider_id": "codex",
+        "source": "pass_b_uncertain_execution",
+        "status": "UNCERTAIN",
+        "reason": (
+            "External execution outcome remains possible. "
+            "Founder disposition is required; no result or retry "
+            "will be accepted."
+        ),
+    }
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+    assert 'text: "Founder disposition"' in qml
+    assert "keeper.resolveUncertainExecution(modelData.assignment_id)" in qml
 
 
 def test_rendered_smoke_contract_covers_all_pages_at_wide_and_minimum() -> None:
@@ -371,6 +436,28 @@ def test_qml_task_finding_project_controls_and_responsive_assistant() -> None:
     assert "if (width >= 1360 && narrowAssistantDialog.visible)" in qml
     assert "window.width < 1300 ? 210 : 248" in qml
     assert "Layout.preferredHeight: 380" in qml
+
+
+def test_qml_reports_filter_exportable_and_pending_runs() -> None:
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+    assert 'property string reportAvailabilityFilter: "ALL"' in qml
+    assert "function reportRows()" in qml
+    assert 'model: ["ALL", "EXPORTABLE", "PENDING"]' in qml
+    assert "model: reportRows()" in qml
+
+
+def test_qml_filters_provider_health_and_recovery_action_state() -> None:
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+    assert 'model: ["ALL", "READY", "NOT READY"]' in qml
+    assert "function providerRows()" in qml
+    assert "model: providerRows()" in qml
+    assert 'model: ["ALL", "UNCERTAIN", "RESUMABLE"]' in qml
+    assert "function recoveryRows()" in qml
+    assert "model: recoveryRows()" in qml
     for state in (
         "BACKLOG",
         "READY",

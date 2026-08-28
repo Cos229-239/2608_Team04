@@ -103,7 +103,7 @@ def _assignment() -> AssignmentRecord:
 
 
 def test_record_registry_is_complete_and_uses_durable_kinds() -> None:
-    assert len(PASS_B_RECORD_TYPES) == 25
+    assert len(PASS_B_RECORD_TYPES) == 26
     assert set(PASS_B_RECORD_BY_KIND) == {
         record_type.KIND for record_type in PASS_B_RECORD_TYPES
     }
