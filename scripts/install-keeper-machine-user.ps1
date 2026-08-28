@@ -8,7 +8,9 @@ $HostRoot = Join-Path $PayloadRoot "provider-host"
 $HostExe = Join-Path $HostRoot "KeeperProviderHost.exe"
 $HostManifestPath = Join-Path $HostRoot "keeper-provider-host-package-manifest.json"
 $HostManifest = Get-Content -LiteralPath $HostManifestPath -Raw | ConvertFrom-Json
-$InstallRoot = Join-Path $env:LOCALAPPDATA "Programs\KeeperProviderHost"
+# Match the protected enrollment client's compatibility path; do not migrate
+# installed identity/state as part of an installer path fix.
+$InstallRoot = Join-Path $env:LOCALAPPDATA "Programs\DarkSage\KeeperProviderHost"
 $StartupRoot = [Environment]::GetFolderPath('Startup')
 $env:PYTHONPATH = $Source
 $HostCommand = if (Test-Path -LiteralPath (Join-Path $InstallRoot 'current.json')) { 'update' } else { 'install' }

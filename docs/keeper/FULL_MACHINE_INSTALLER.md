@@ -5,6 +5,18 @@ KeeperAuthority for the computer, then returns to the signed-in Windows user to
 install the Provider Host, complete Founder-confirmed enrollment, and install
 Keeper Desktop. Provider credentials are never copied into the package.
 
+Provider Host setup and enrollment must use the same compatibility directory,
+`%LOCALAPPDATA%\Programs\DarkSage\KeeperProviderHost`. This historical directory
+name is not product branding; changing it requires a separately reviewed
+identity/state migration. The installer path regression test compares setup's
+destination with the production enrollment client's actual destination.
+
+The current wrapper requests enrollment generation 1. Do not use it to reset an
+already enrolled computer or delete protected history to simulate a fresh PC.
+Existing installations require the supported component repair/upgrade and
+enrollment-recovery procedures. End-to-end clean-machine validation is still
+required; preflight checks are not evidence of a completed installation.
+
 Build inputs are exact, prebuilt Desktop, Authority, and Provider Host packages:
 
 ```powershell
