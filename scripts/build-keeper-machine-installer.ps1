@@ -84,6 +84,7 @@ Copy-Item -LiteralPath $ProviderHostRoot -Destination (Join-Path $Payload 'provi
 Copy-Item -LiteralPath $AuthorityPackageRoot -Destination (Join-Path $Payload 'authority') -Recurse
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-keeper-machine-authority.ps1') -Destination (Join-Path $Payload 'install-machine-authority.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-keeper-machine-user.ps1') -Destination (Join-Path $Payload 'install-user-components.ps1')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'keeper-machine-user-setup.py') -Destination $Payload
 
 $Files = Get-ChildItem -LiteralPath $Payload -File -Recurse | Sort-Object FullName | ForEach-Object {
     [ordered]@{ path = $_.FullName.Substring($Payload.Length + 1).Replace('\','/'); size = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }

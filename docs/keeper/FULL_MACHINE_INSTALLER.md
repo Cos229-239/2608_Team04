@@ -11,11 +11,32 @@ name is not product branding; changing it requires a separately reviewed
 identity/state migration. The installer path regression test compares setup's
 destination with the production enrollment client's actual destination.
 
-The current wrapper requests enrollment generation 1. Do not use it to reset an
-already enrolled computer or delete protected history to simulate a fresh PC.
-Existing installations require the supported component repair/upgrade and
-enrollment-recovery procedures. End-to-end clean-machine validation is still
-required; preflight checks are not evidence of a completed installation.
+Setup supports initial installation and conservative reinstalls. An existing
+Authority must have the exact bundled archive bytes. An existing same-version
+Host is retained only after package, protected ACL, signed committed enrollment,
+live Authority enrollment, current user/session, and executable file identity
+checks. The enrolled Host may be an earlier build of that same version; setup
+explicitly retains it, rather than claiming to replace it with the bundled Host.
+The desktop then uses its existing verified repair/upgrade lifecycle.
+
+Generation 1 is requested only for a genuinely unenrolled Host with no prior
+enrollment/database state, and still requires interactive Founder confirmation.
+Pending transactions, revoked/stale enrollment, changed sessions/identities, and
+different component versions stop setup and require the supported recovery or
+upgrade procedure. Setup never deletes protected history to simulate a fresh PC.
+
+Each component's exit code is checked in Inno Setup's `PrepareToInstall` hook.
+An Authority failure prevents the user phase, and any user-phase failure prevents
+the successful completion page. Setup does not automatically retry failed phases
+or claim to roll back earlier successful component operations. Diagnostic logs
+are retained as `Keeper-machine-authority-*.log`, `Keeper-machine-user-*.log`, and
+the Inno Setup log in Windows temporary folders (the administrator's temp folder
+may differ from the signed-in user's). Close setup and resolve the reported error
+before rerunning it. First-time enrollment cancellation may need reconciliation,
+not a new enrollment attempt.
+
+End-to-end clean-machine validation is still required; preflight checks and a
+successful reinstall are not evidence of a completed fresh-PC installation.
 
 Build inputs are exact, prebuilt Desktop, Authority, and Provider Host packages:
 

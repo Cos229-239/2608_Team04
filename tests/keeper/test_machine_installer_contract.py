@@ -65,7 +65,11 @@ def test_full_machine_setup_splits_admin_and_user_phases() -> None:
     assert "PrivilegesRequired=admin" in definition
     assert "install-machine-authority.ps1" in definition
     assert "install-user-components.ps1" in definition
-    assert "runasoriginaluser" in definition
+    assert "ExecAsOriginalUser" in definition
+    assert "PrepareToInstall" in definition
+    assert "ResultCode <> 0" in definition
+    assert "if ComponentError = '' then" in definition
+    assert "[Run]\n" not in definition
     assert "Founder confirmation is required" in definition
 
 
@@ -92,7 +96,7 @@ def test_machine_setup_does_not_embed_or_copy_provider_credentials() -> None:
 
     assert "api_key" not in scripts
     assert "credential copy" not in scripts
-    assert "provider-host enroll" in scripts
+    assert "keeper-machine-user-setup.py" in scripts
 
 
 def test_machine_builder_binds_all_artifacts_to_one_source_identity() -> None:

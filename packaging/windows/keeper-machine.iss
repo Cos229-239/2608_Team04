@@ -34,22 +34,70 @@ WizardStyle=modern
 Uninstallable=no
 CreateAppDir=no
 UsePreviousAppDir=no
+SetupLogging=yes
 VersionInfoVersion={#AppVersion}
 VersionInfoProductName=Keeper Full Machine Setup
 VersionInfoDescription=Installs KeeperAuthority, Provider Host, enrollment, and Keeper Desktop
 
 [Files]
-Source: "{#PayloadRoot}\*"; DestDir: "{tmp}\KeeperMachinePayload"; Flags: recursesubdirs createallsubdirs deleteafterinstall ignoreversion
-
-[Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\KeeperMachinePayload\install-machine-authority.ps1"" -PayloadRoot ""{tmp}\KeeperMachinePayload"""; WorkingDir: "{tmp}\KeeperMachinePayload"; StatusMsg: "Installing and verifying KeeperAuthority..."; Flags: waituntilterminated
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\KeeperMachinePayload\install-user-components.ps1"" -PayloadRoot ""{tmp}\KeeperMachinePayload"""; WorkingDir: "{tmp}\KeeperMachinePayload"; StatusMsg: "Installing Provider Host and Keeper Desktop..."; Flags: waituntilterminated runasoriginaluser
+Source: "{#PayloadRoot}\*"; DestDir: "{tmp}\KeeperMachinePayload"; Flags: recursesubdirs createallsubdirs dontcopy noencryption
 
 [Code]
+var
+  ComponentsAttempted: Boolean;
+  ComponentError: String;
+
+function RunComponent(ScriptName: String; OriginalUser: Boolean): String;
+var
+  Started: Boolean;
+  ResultCode: Integer;
+  ProgramPath, Parameters, Payload: String;
+begin
+  Payload := ExpandConstant('{tmp}\KeeperMachinePayload');
+  ProgramPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  Parameters := '-NoProfile -ExecutionPolicy Bypass -File "' + Payload + '\' + ScriptName + '" -PayloadRoot "' + Payload + '"';
+  Log('Starting Keeper component: ' + ScriptName);
+  if OriginalUser then
+    Started := ExecAsOriginalUser(ProgramPath, Parameters, Payload, SW_HIDE, ewWaitUntilTerminated, ResultCode)
+  else
+    Started := Exec(ProgramPath, Parameters, Payload, SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := '';
+  if (not Started) or (ResultCode <> 0) then
+    Result := ScriptName + ' failed (code ' + IntToStr(ResultCode) + '). Keeper setup is incomplete. ' +
+      'See the Keeper-machine-*.log files in your Windows temp folder and the Setup log. ' +
+      'Existing data has not been reset. Close setup before trying again.';
+  Log('Keeper component result: ' + ScriptName + '; code=' + IntToStr(ResultCode));
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  { A nonempty result stops at Preparing to Install with a failure exit code.
+    Unlike [Run], child failures cannot reach the successful completion page.
+    Cache the result so the wizard cannot silently repeat a failed phase. }
+  if not ComponentsAttempted then begin
+    ComponentsAttempted := True;
+    ComponentError := 'Keeper setup did not complete.';
+    try
+      WizardForm.PreparingLabel.Caption := 'Extracting and verifying Keeper components. This may take a few minutes...';
+      ExtractTemporaryFiles('{tmp}\KeeperMachinePayload\*');
+      WizardForm.PreparingLabel.Caption := 'Installing and verifying KeeperAuthority...';
+      ComponentError := RunComponent('install-machine-authority.ps1', False);
+      if ComponentError = '' then begin
+        WizardForm.PreparingLabel.Caption := 'Verifying Provider Host, enrollment, and Keeper Desktop...';
+        ComponentError := RunComponent('install-user-components.ps1', True);
+      end;
+    except
+      ComponentError := 'Keeper setup stopped: ' + GetExceptionMessage;
+      Log(ComponentError);
+    end;
+  end;
+  Result := ComponentError;
+end;
+
 procedure InitializeWizard;
 begin
   WizardForm.WelcomeLabel1.Caption := 'Install Keeper on this Windows computer';
   WizardForm.WelcomeLabel2.Caption :=
-    'Setup installs the protected KeeperAuthority service for the machine, then installs and enrolls the Provider Host and Keeper Desktop for your Windows account.' + #13#10 + #13#10 +
+    'Setup installs KeeperAuthority, Provider Host, and Keeper Desktop. On an existing setup, verified compatible services and enrollment are retained while the desktop is repaired or upgraded.' + #13#10 + #13#10 +
     'Founder confirmation is required during enrollment. Setup never copies provider credentials.';
 end;
