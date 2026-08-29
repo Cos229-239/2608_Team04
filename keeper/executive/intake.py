@@ -215,9 +215,9 @@ class ConversationIntake:
         if not match:
             return ()
         return tuple(
-            item.strip(" .")
+            item.strip(" .:")
             for item in re.split(r";|,|\band\b", match.group(1))
-            if item.strip(" .")
+            if item.strip(" .:")
         )
 
     @staticmethod
@@ -227,7 +227,7 @@ class ConversationIntake:
             text,
             re.IGNORECASE,
         )
-        return match.group(1).strip() if match else None
+        return match.group(1).strip(" :") if match else None
 
     @staticmethod
     def _approved_items(text: str, item_pattern: str) -> tuple[str, ...]:
@@ -239,9 +239,9 @@ class ConversationIntake:
         if not match:
             return ()
         return tuple(
-            item.strip(" .").casefold()
+            item.strip(" .:").casefold()
             for item in re.split(r",|\band\b", match.group(1))
-            if item.strip(" .")
+            if item.strip(" .:")
         )
 
 

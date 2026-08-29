@@ -110,6 +110,20 @@ def test_intake_accepts_explicit_success_criteria_and_audience() -> None:
     assert result.fields["approved_tools"].value == ("filesystem",)
 
 
+def test_intake_accepts_colons_after_natural_are_and_is_phrasing() -> None:
+    result = ConversationIntake().extract(
+        "Success criteria are: the warning is removed; tests pass. "
+        "Primary user is: Devon. Approved providers are: codex and claude."
+    )
+
+    assert result.fields["success_criteria"].value == (
+        "the warning is removed",
+        "tests pass",
+    )
+    assert result.fields["target_audience"].value == "Devon"
+    assert result.fields["approved_providers"].value == ("codex", "claude")
+
+
 def test_revision_replaces_assumption_and_removes_deliverable(tmp_path: Path) -> None:
     intake = ConversationIntake().extract("I want a research report about urban gardens.")
     revised = ConversationIntake.revise(
