@@ -165,6 +165,28 @@ class ConversationService:
                 "charter approval is already pending; approve or revise it explicitly"
             )
         if current.state == "APPROVED":
+            lower = message.casefold()
+            revision_requested = any(
+                marker in lower
+                for marker in (
+                    "revise the charter",
+                    "revise this charter",
+                    "change the charter",
+                    "update the charter",
+                )
+            )
+            if revision_requested:
+                extracted = ConversationIntake().extract(message)
+                replacements = {
+                    name: item.value
+                    for name, item in extracted.fields.items()
+                    if item.provenance == "EXPLICIT"
+                }
+                if not replacements:
+                    raise ValueError(
+                        "charter revision did not provide an explicit clarification"
+                    )
+                return self.revise(project_id, replacements)
             self._message(
                 project_id,
                 "KEEPER",

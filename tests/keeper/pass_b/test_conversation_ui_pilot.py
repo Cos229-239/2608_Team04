@@ -116,6 +116,26 @@ def test_active_charter_can_be_renewed_without_losing_current_authority(
     )
 
 
+def test_explicit_conversation_revision_renews_an_active_charter(
+    tmp_path: Path,
+) -> None:
+    application, active = _approved_application(tmp_path)
+
+    outcome = application.continue_conversation(
+        active.project_id,
+        "Revise this charter to delegated mode.",
+    )
+
+    assert outcome is not None
+    assert outcome.charter.status == "PROPOSED"
+    assert outcome.charter.revision == active.revision + 1
+    assert outcome.charter.delegation_mode == "DELEGATED"
+    assert outcome.project.active_charter_id == active.charter_id
+    assert application.conversation.current_context(active.project_id).state == (
+        "PROPOSED"
+    )
+
+
 def test_delegated_mode_is_founder_bound_scoped_and_revocable(
     tmp_path: Path,
 ) -> None:
