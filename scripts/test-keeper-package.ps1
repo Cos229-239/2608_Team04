@@ -4,7 +4,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path ([IO.Path]::GetTempPath()) ("keeper-smoke-" + [Guid]::NewGuid().ToString("N"))
 }
