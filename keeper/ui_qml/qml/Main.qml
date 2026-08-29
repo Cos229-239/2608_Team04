@@ -50,6 +50,29 @@ ApplicationWindow {
         if (window.width < 1360) narrowAssistantDialog.open()
         else assistantDrawer.userOpened = true
     }
+    function currentDelegationMode() {
+        if (!keeper.state.project) return "ADVISORY"
+        var pending = keeper.state.project.approvalCharter || {}
+        var active = keeper.state.project.charter || {}
+        return String(pending.delegation_mode || active.delegation_mode || "ADVISORY").toUpperCase()
+    }
+    function delegatedWorkReady() {
+        var mode = currentDelegationMode()
+        return mode === "DELEGATED" || mode === "FULL_DELEGATION"
+    }
+    function workflowActionText() {
+        if (keeper.state.project && keeper.state.project.approvalRequired)
+            return "Review Required Approval"
+        return delegatedWorkReady() ? "Run Approved Work" : "Enable Approved Work"
+    }
+    function handleWorkflowAction() {
+        if (keeper.state.project && keeper.state.project.approvalRequired)
+            charterDialog.open()
+        else if (!delegatedWorkReady())
+            delegatedModeDialog.open()
+        else
+            keeper.runDelegatedCompletion()
+    }
     function pageIndex(name) {
         var pages = keeper.state.navigation || []
         for (var i = 0; i < pages.length; ++i)
@@ -645,7 +668,14 @@ ApplicationWindow {
                         contentWidth: width; contentHeight: workflowColumn.implicitHeight + 48; clip: true
                         ColumnLayout {
                             id: workflowColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
-                            PageHeader { title: "Workflows"; subtitle: "Plan, implementation, independent review, repair, and verification."; actionText: "Run Approved Work"; actionEnabled: !!(keeper.state.project && keeper.state.project.id) && !keeper.busy; onAction: keeper.runDelegatedCompletion() }
+                            PageHeader { title: "Workflows"; subtitle: "Plan, implementation, independent review, repair, and verification."; actionText: window.workflowActionText(); actionEnabled: !!(keeper.state.project && keeper.state.project.id) && !keeper.busy; onAction: window.handleWorkflowAction() }
+                            KPanel {
+                                Layout.fillWidth: true
+                                visible: !!(keeper.state.project && keeper.state.project.id) && !window.delegatedWorkReady()
+                                SectionTitle { text: "APPROVED WORK IS NOT ENABLED" }
+                                BodyText { Layout.fillWidth: true; text: "This project is in Advisory mode. Keeper can show the plan, but it cannot run a provider until you approve Delegated mode." }
+                                MutedText { Layout.fillWidth: true; text: "Choose Enable Approved Work above. Keeper will prepare the one required revision and clearly show the Founder approval step." }
+                            }
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "ACTIVE WORKFLOW" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 10; model: filtered(keeper.state.workflows || []); delegate: Rectangle { width: ListView.view.width; height: 82; radius: 6; color: workflowMouse.containsMouse ? "#1B1D1C" : "#121414"; border.color: statusColor(modelData.status); RowLayout { anchors.fill: parent; anchors.margins: 14; Rectangle { Layout.preferredWidth: 42; Layout.preferredHeight: 42; radius: 21; color: "#2D2513"; Text { anchors.centerIn: parent; text: index + 1; color: goldBright; font.pixelSize: 18 } } ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, "Work item"); font.weight: Font.DemiBold; elide: Text.ElideRight; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Role: " + window.text(modelData.role, "unassigned"); elide: Text.ElideRight; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "PROPOSED") } QuietButton { text: "Stage details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } MouseArea { id: workflowMouse; anchors.fill: parent; hoverEnabled: true; z: -1; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No workflow planned"; detail: "Approve the proposed charter once. Keeper will then plan and advance routine work inside its delegated envelope." } } }
                         }
                     }
@@ -1000,8 +1030,33 @@ ApplicationWindow {
             Image { Layout.alignment: Qt.AlignHCenter; source: keeperIcon; sourceSize.width: 100; sourceSize.height: 100; Layout.preferredWidth: 100; Layout.preferredHeight: 100 }
             Text { Layout.alignment: Qt.AlignHCenter; text: "Approve Project Charter"; color: goldBright; font.pixelSize: 23; font.weight: Font.Bold }
             BodyText { Layout.fillWidth: true; text: window.text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
+            MutedText { Layout.fillWidth: true; text: "Revision " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.revision : "", "unknown") + "  •  Mode: " + window.currentDelegationMode(); horizontalAlignment: Text.AlignHCenter }
+            MutedText { Layout.fillWidth: true; text: "Approved providers: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.approved_providers : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            MutedText { Layout.fillWidth: true; text: "Constraints: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.constraints : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
             MutedText { Layout.fillWidth: true; text: "Approval invokes the production Founder authenticator and binds only the exact displayed charter revision. Routine work inside that charter proceeds without repeated approval."; horizontalAlignment: Text.AlignHCenter }
             RowLayout { Layout.alignment: Qt.AlignHCenter; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; onClicked: { charterDialog.close(); keeper.approveCurrentCharter() } } }
+        }
+    }
+
+    Dialog {
+        id: delegatedModeDialog
+        objectName: "delegatedModeDialog"
+        anchors.centerIn: parent
+        width: Math.min(620, window.width - 80)
+        modal: true
+        title: "Enable Approved Work"
+        standardButtons: Dialog.NoButton
+        background: Rectangle { color: panelRaised; border.color: gold; radius: 8 }
+        contentItem: ColumnLayout {
+            spacing: 14
+            Text { Layout.alignment: Qt.AlignHCenter; text: "One approval enables this workflow"; color: goldBright; font.pixelSize: 22; font.weight: Font.Bold }
+            BodyText { Layout.fillWidth: true; text: "Keeper is currently in Advisory mode, so it can plan but cannot run Codex or another provider."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            MutedText { Layout.fillWidth: true; text: "Prepare a Delegated-mode revision. Your existing workspace, provider, spending, deployment, publishing, and push limits stay unchanged. Nothing runs until you review and authenticate the revision."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                QuietButton { text: "Cancel"; onClicked: delegatedModeDialog.close() }
+                GoldButton { objectName: "prepareDelegatedMode"; text: "Prepare Revision"; onClicked: { delegatedModeDialog.close(); keeper.prepareDelegatedMode() } }
+            }
         }
     }
 

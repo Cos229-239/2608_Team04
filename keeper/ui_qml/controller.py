@@ -368,6 +368,19 @@ class KeeperDesktopController(QObject):
         self._status, self._error = "Describe the new project", ""
         self.statusChanged.emit()
 
+    @Slot()
+    def prepareDelegatedMode(self) -> None:
+        project_id = self.pass_b.selected_project_id()
+        if not project_id:
+            self._fail("Select a Keeper project before enabling approved work.")
+            return
+        self._run(
+            "Delegated-mode revision is ready for Founder approval",
+            lambda: self.pass_b.conversation.revise(
+                project_id, {"delegation_mode": "DELEGATED"}
+            ),
+        )
+
     @Slot(str)
     def sendAssistantMessage(self, message: str) -> None:
         clean = message.strip()

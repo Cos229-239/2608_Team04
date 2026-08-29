@@ -143,6 +143,31 @@ def test_new_project_action_does_not_continue_selected_project(
     )
 
 
+def test_prepare_delegated_mode_creates_only_a_charter_revision(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller.sendAssistantMessage(
+        "Create a local report generator with tests and no network access."
+    )
+    project_id = controller.state_snapshot()["project"]["id"]
+    revisions: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(
+        controller.pass_b.conversation,
+        "revise",
+        lambda selected, replacements: revisions.append(
+            (selected, replacements)
+        ),
+    )
+
+    controller.prepareDelegatedMode()
+
+    assert revisions == [(project_id, {"delegation_mode": "DELEGATED"})]
+    assert controller._get_status() == (
+        "Delegated-mode revision is ready for Founder approval"
+    )
+
+
 def test_unknown_navigation_and_run_actions_fail_closed(
     controller: KeeperDesktopController,
 ) -> None:
@@ -203,6 +228,10 @@ def test_qml_search_and_narrow_assistant_are_real_and_source_backed() -> None:
     assert "keeper.runAction(modelData.run_id, \"resume\")" in qml
     assert "keeper.exportRunReport(window.selectedRunId, selectedFile)" in qml
     assert "Math.min(460, Math.max(120, emptyRoot.width - 24))" in qml
+    assert 'objectName: "delegatedModeDialog"' in qml
+    assert 'objectName: "prepareDelegatedMode"' in qml
+    assert "window.workflowActionText()" in qml
+    assert "window.handleWorkflowAction()" in qml
 
 
 def test_recovery_projects_pass_b_uncertainty_and_founder_disposition(
