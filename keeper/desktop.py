@@ -646,22 +646,20 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--ui-smoke", action="store_true")
     result.add_argument("--screenshot-dir", type=Path)
     result.add_argument("--test-ui-fixture", action="store_true")
-    result.add_argument("--legacy-tk", action="store_true")
     return result
 
 
 def main(arguments: list[str] | None = None) -> int:
     options = parser().parse_args(arguments)
     application = KeeperApplication(options.data_dir)
+
     if options.diagnostics:
         print(json.dumps(application.diagnostics(), indent=2))
         return 0
     if options.mock_demo:
         print(json.dumps(application.run_mock_demo(), indent=2))
         return 0
-    if options.legacy_tk:
-        KeeperProductDesktop(application).run()
-        return 0
+
     from keeper.ui_qml import run_desktop
 
     if options.ui_smoke:
@@ -673,6 +671,7 @@ def main(arguments: list[str] | None = None) -> int:
         test_fixture=options.test_ui_fixture,
         restart_command=[sys.executable, "-m", "keeper.desktop", *sys.argv[1:]],
     )
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
