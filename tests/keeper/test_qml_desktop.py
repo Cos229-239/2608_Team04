@@ -121,6 +121,28 @@ def test_assistant_creates_durable_conversation_not_fake_chat(
     assert snapshot["project"]["approvalRequired"] is True
 
 
+def test_new_project_action_does_not_continue_selected_project(
+    controller: KeeperDesktopController,
+) -> None:
+    controller.sendAssistantMessage(
+        "Create a local report generator with tests and no network access."
+    )
+    first_project_id = controller.state_snapshot()["project"]["id"]
+
+    controller.startNewProject()
+    controller.sendAssistantMessage(
+        "Fix one QML lint warning without changing layout or behavior."
+    )
+
+    snapshot = controller.state_snapshot()
+    assert snapshot["project"]["id"] != first_project_id
+    assert len(controller.pass_b.project_catalog()) == 2
+    assert any(
+        "qml lint warning" in str(item["body"]).lower()
+        for item in snapshot["timeline"]
+    )
+
+
 def test_unknown_navigation_and_run_actions_fail_closed(
     controller: KeeperDesktopController,
 ) -> None:

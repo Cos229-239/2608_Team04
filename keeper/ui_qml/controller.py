@@ -147,6 +147,7 @@ class KeeperDesktopController(QObject):
         self._status = "Ready"
         self._error = ""
         self._developer_details = False
+        self._new_project_intake = False
         self._test_fixture = test_fixture
         self._setup = ProductSetupController(application)
         self._state: dict[str, Any] = {}
@@ -361,6 +362,12 @@ class KeeperDesktopController(QObject):
     def selectProject(self, project_id: str) -> None:
         self._run("Project selected", lambda: self.pass_b.select_project(project_id))
 
+    @Slot()
+    def startNewProject(self) -> None:
+        self._new_project_intake = True
+        self._status, self._error = "Describe the new project", ""
+        self.statusChanged.emit()
+
     @Slot(str)
     def sendAssistantMessage(self, message: str) -> None:
         clean = message.strip()
@@ -368,10 +375,16 @@ class KeeperDesktopController(QObject):
             self._fail("Describe the project or ask Keeper a question first.")
             return
         project_id = self.pass_b.selected_project_id()
+
+        def begin_new_project() -> object:
+            result = self.pass_b.begin_conversation(clean)
+            self._new_project_intake = False
+            return result
+
         operation: Callable[[], object] = (
-            (lambda: self.pass_b.continue_conversation(project_id, clean))
-            if project_id
-            else (lambda: self.pass_b.begin_conversation(clean))
+            begin_new_project
+            if self._new_project_intake or not project_id
+            else lambda: self.pass_b.continue_conversation(project_id, clean)
         )
         self._run("Keeper recorded the conversation", operation)
 

@@ -492,7 +492,7 @@ ApplicationWindow {
                         contentWidth: width; contentHeight: overviewColumn.implicitHeight + 48; clip: true
                         ColumnLayout {
                             id: overviewColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
-                            PageHeader { title: "Overview"; subtitle: "Projects, work, and verified safety state at a glance."; actionText: "+ Describe a Project"; onAction: { window.openAssistant(); keeper.navigate("Overview") } }
+                            PageHeader { title: "Overview"; subtitle: "Projects, work, and verified safety state at a glance."; actionText: "+ Describe a Project"; onAction: { keeper.startNewProject(); window.openAssistant(); keeper.navigate("Overview") } }
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 112
@@ -604,7 +604,7 @@ ApplicationWindow {
                         contentWidth: width; contentHeight: projectColumn.implicitHeight + 48; clip: true
                         ColumnLayout {
                             id: projectColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
-                            PageHeader { title: "Projects & Charters"; subtitle: "Founder intent, current charter, and execution boundaries."; actionText: "+ New Project"; onAction: { window.openAssistant(); keeper.navigate("Overview") } }
+                            PageHeader { title: "Projects & Charters"; subtitle: "Founder intent, current charter, and execution boundaries."; actionText: "+ New Project"; onAction: { keeper.startNewProject(); window.openAssistant(); keeper.navigate("Overview") } }
                             RowLayout { Layout.fillWidth: true; Item { Layout.fillWidth: true } BodyText { text: "Project state" } ComboBox { id: projectStateSelector; Layout.preferredWidth: 230; model: ["ALL", "INTAKE", "CLARIFICATION_REQUIRED", "CHARTER_DRAFT", "AWAITING_CHARTER_APPROVAL", "ACTIVE", "PLANNING", "EXECUTING", "REVIEWING", "BLOCKED", "PAUSED", "WAITING_FOR_PROVIDER", "WAITING_FOR_USAGE_RESET", "WAITING_FOR_FOUNDER", "WAITING_FOR_CREDENTIAL", "WAITING_FOR_EXTERNAL_SYSTEM", "COMPLETED", "CANCELED", "FAILED", "RECOVERY_REQUIRED", "UNKNOWN"]; onActivated: window.projectStateFilter = currentText } }
                             KPanel {
                                 Layout.fillWidth: true; Layout.preferredHeight: 230
