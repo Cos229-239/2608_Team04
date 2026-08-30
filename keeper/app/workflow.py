@@ -87,9 +87,26 @@ class WorkflowCoordinator:
         self.startup_recovery = self.recover_interrupted_runs()
 
     def start(
-        self, task_id: str, metadata: dict[str, Any] | None = None
+        self,
+        task_id: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        validated_task: dict[str, Any],
+        task_digest: str,
     ) -> dict[str, Any]:
-        task = self._task(task_id)
+        claim = self.store.get("settings", f"task_launch_claim:{task_id}")
+        serialized = json.dumps(
+            validated_task, sort_keys=True, separators=(",", ":")
+        )
+        if (
+            not isinstance(claim, dict)
+            or claim.get("task_id") != task_id
+            or claim.get("task_digest") != task_digest
+            or hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+            != task_digest
+        ):
+            raise PermissionError("workflow task launch claim is invalid")
+        task = dict(validated_task)
         run_id = f"run-{uuid.uuid4().hex}"
         if (
             task.get("provider_policy") == "mock"

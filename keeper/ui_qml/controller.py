@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import re
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -22,6 +23,7 @@ from keeper.ui.view_models import ProductViewModel, build_product_view
 
 NAVIGATION: tuple[str, ...] = (
     "Overview",
+    "Keeper",
     "Projects",
     "Repositories",
     "Workflows",
@@ -75,6 +77,22 @@ def _safe_error_message(value: object) -> str:
     for pattern in patterns:
         message = re.sub(pattern, "[local path redacted]", message)
     return message
+
+
+def _completion_feedback(results: object) -> tuple[str, str, bool]:
+    steps = tuple(results) if isinstance(results, (list, tuple)) else ()
+    final = steps[-1] if steps else None
+    state = str(getattr(final, "state", "BLOCKED")).upper()
+    detail = str(getattr(final, "detail", "No workflow step was available."))
+    if state == "COMPLETED":
+        return "Approved work is complete", "", True
+    if state == "PROGRESS":
+        return detail, "", True
+    if state == "WAITING_FOR_USAGE_RESET":
+        return "Keeper exhausted the approved provider options", detail, False
+    if state == "UNCERTAIN":
+        return "Keeper preserved an uncertain external result", detail, False
+    return "Keeper reached the approved charter boundary", detail, False
 
 
 _PRIVATE_PATH_FIELDS = {
@@ -131,6 +149,7 @@ class KeeperDesktopController(QObject):
     statusChanged = Signal()
     setupChanged = Signal()
     operationFinished = Signal(str, bool)
+    _asyncFinished = Signal(object, str, str, bool)
 
     def __init__(
         self,
@@ -151,6 +170,7 @@ class KeeperDesktopController(QObject):
         self._test_fixture = test_fixture
         self._setup = ProductSetupController(application)
         self._state: dict[str, Any] = {}
+        self._asyncFinished.connect(self._finish_async)
         self.refresh()
 
     def _get_state(self) -> dict[str, Any]:
@@ -216,6 +236,11 @@ class KeeperDesktopController(QObject):
     def refresh(self) -> None:
         self._run("Durable state refreshed", self._build_state, result_to_state=True)
 
+    def _refresh_state_only(self) -> None:
+        """Refresh presentation data without replacing useful operation feedback."""
+        self._state = self._build_state()
+        self.stateChanged.emit()
+
     def _build_state(self) -> dict[str, Any]:
         snapshot = self.pass_b.product_snapshot()
         view = build_product_view(snapshot, developer_details=self._developer_details)
@@ -228,18 +253,94 @@ class KeeperDesktopController(QObject):
             ),
             {},
         )
-        runs = [
-            _public_record(item) for item in self.application.store.list("runs")
-        ]
+        legacy_active = self.application.active_project()
+        selected_project_id = view.project_id or (
+            f"repository:{legacy_active['id']}" if legacy_active else None
+        )
+        selected_charter = view.charter_detail
+        all_tasks = self.application.tasks()
+        scoped_tasks = (
+            all_tasks
+            if self._test_fixture and view.project_id is None
+            else [
+                item
+                for item in all_tasks
+                if selected_project_id
+                and item.get("keeper_project_id") == selected_project_id
+                and (
+                    view.project_id is None
+                    or (
+                        item.get("keeper_charter_id")
+                        == selected_charter.get("charter_id")
+                        and item.get("keeper_charter_revision")
+                        == selected_charter.get("revision")
+                        and item.get("keeper_founder_approval_record_id")
+                        == selected_charter.get("founder_approval_record_id")
+                        and item.get("keeper_founder_approval_identity")
+                        == selected_charter.get("founder_approval_identity")
+                    )
+                )
+            ]
+        )
+        scoped_task_ids = {str(item.get("id", "")) for item in scoped_tasks}
+        all_runs = self.application.store.list("runs")
+        raw_runs = (
+            all_runs
+            if self._test_fixture and view.project_id is None
+            else [
+                item
+                for item in all_runs
+                if str(item.get("task_id", "")) in scoped_task_ids
+            ]
+        )
+        runs = [_public_record(item) for item in raw_runs]
         projects = [_public_record(item) for item in self.application.projects()]
-        tasks = [_public_record(item) for item in self.application.tasks()]
+        live_run_by_task = {
+            str(item.get("task_id", "")): item
+            for item in raw_runs
+            if str(item.get("status", "")).lower()
+            not in {"completed", "rejected", "blocked", "cancelled"}
+        }
+        tasks = []
+        for item in scoped_tasks:
+            projected = _public_record(item)
+            active_run = live_run_by_task.get(str(item.get("id", "")))
+            if active_run is not None:
+                projected["status"] = str(active_run.get("status", "RUNNING")).upper()
+                projected["run_id"] = str(active_run.get("id", ""))
+            tasks.append(projected)
+        scoped_run_ids = {str(item.get("id", "")) for item in raw_runs}
         findings = [
-            _public_record(item) for item in self.application.store.list("findings")
+            _public_record(item)
+            for item in self.application.store.list("findings")
+            if str(item.get("task_id", "")) in scoped_task_ids
+            or str(item.get("run_id", "")) in scoped_run_ids
         ]
         authorizations = [
             _public_record(item)
             for item in self.application.store.list("authorizations")
+            if str(item.get("task_id", "")) in scoped_task_ids
         ]
+        active_charter = view.charter_detail
+        founder_approval_id = active_charter.get("founder_approval_record_id")
+        if founder_approval_id:
+            authorizations.append(
+                _public_record(
+                    {
+                        "id": founder_approval_id,
+                        "capability": "charter approval receipt",
+                        "scope": (
+                            f"{view.project_title} — revision "
+                            f"{active_charter.get('revision', 'unknown')}"
+                        ),
+                        "consumed_at": active_charter.get("approved_at")
+                        or active_charter.get("activated_at")
+                        or active_charter.get("updated_at")
+                        or "recorded",
+                        "revoked_at": None,
+                    }
+                )
+            )
         recoveries = [
             _public_record(item) for item in self.application.recover_runs()
         ]
@@ -281,6 +382,36 @@ class KeeperDesktopController(QObject):
         ]
         recoveries.extend(pass_b_uncertain)
         settings = self.application.store.get("settings", "application") or {}
+        routing = self.application.store.get("settings", "routing") or {}
+        conversation_providers = [
+            {
+                "provider_id": str(item.get("provider_id", "")),
+                "name": str(item.get("name") or item.get("provider_id") or ""),
+                "health": str(item.get("health", "UNAVAILABLE")),
+            }
+            for item in view.provider_cards
+            if (
+                str(item.get("health", "")).upper() == "READY"
+                and str(item.get("composition", "")).upper() != "MOCK"
+                and item.get("provider_id")
+            )
+        ]
+        ready_provider_ids = {
+            item["provider_id"] for item in conversation_providers
+        }
+        configured_conversation_provider = str(
+            routing.get("conversation_provider_id") or ""
+        )
+        if configured_conversation_provider not in ready_provider_ids:
+            configured_conversation_provider = (
+                "codex"
+                if "codex" in ready_provider_ids
+                else (
+                    conversation_providers[0]["provider_id"]
+                    if conversation_providers
+                    else ""
+                )
+            )
         state = {
             "navigation": list(NAVIGATION),
             "environment": (
@@ -342,9 +473,11 @@ class KeeperDesktopController(QObject):
                     provider: _public_path(path)
                     for provider, path in self.application.provider_paths().items()
                 },
+                "conversationProvider": configured_conversation_provider,
+                "conversationProviders": conversation_providers,
             },
             "counts": {
-                "projects": len(view.project_catalog) + len(projects),
+                "projects": len(view.project_catalog),
                 "workflows": len(view.workflow_rows),
                 "tasks": len(tasks),
                 "findings": len(findings),
@@ -354,6 +487,16 @@ class KeeperDesktopController(QObject):
                 "uncertain": sum(
                     1 for row in runs if str(row.get("status", "")).upper() == "UNCERTAIN"
                 ) + len(pass_b_uncertain),
+                "projectUncertain": sum(
+                    1
+                    for row in runs
+                    if str(row.get("status", "")).upper() == "UNCERTAIN"
+                )
+                + sum(
+                    1
+                    for row in pass_b_uncertain
+                    if row.get("project_id") == view.project_id
+                ),
             },
         }
         return cast(dict[str, Any], _primitive(state))
@@ -389,8 +532,63 @@ class KeeperDesktopController(QObject):
             return
         project_id = self.pass_b.selected_project_id()
 
+        if re.search(
+            r"\b(current|approved|project)\b.*\b(status|summary|progress)\b|"
+            r"\b(status|summary|progress)\b.*\b(project|approved)\b",
+            clean.casefold(),
+        ):
+            project = self._state.get("project", {})
+            workflows = self._state.get("workflows", [])
+            completed = sum(
+                str(item.get("status", "")).upper() == "COMPLETED"
+                for item in workflows
+            )
+            reply = (
+                f"{project.get('title') or 'The selected project'} is "
+                f"{str(project.get('status') or 'not started').replace('_', ' ').lower()} "
+                f"under approved charter revision "
+                f"{project.get('charterRevision') or 'unknown'}. "
+                f"Workflow progress is {completed} of {len(workflows)} stages complete. "
+                f"There are {self._state.get('counts', {}).get('projectUncertain', 0)} "
+                "uncertain outcomes awaiting recovery."
+            )
+            self._run_conversation(
+                "Keeper is checking the approved project",
+                "Keeper summarized the approved project",
+                lambda: self.pass_b.conversation.respond(
+                    project_id, clean, reply
+                ),
+            )
+            return
+
+        if self.pass_b.conversation.conversational_reply(clean) is not None:
+            self._run_conversation(
+                "Keeper is replying",
+                "Keeper replied",
+                lambda: self.pass_b.casual_conversation(project_id, clean),
+            )
+            return
+
         def begin_new_project() -> object:
-            result = self.pass_b.begin_conversation(clean)
+            settings = self._state.get("settings", {})
+            selected = str(settings.get("conversationProvider") or "")
+            ready = tuple(
+                str(item.get("provider_id"))
+                for item in settings.get("conversationProviders", [])
+                if item.get("provider_id")
+            )
+            approved = tuple(
+                dict.fromkeys((selected, *ready))
+            ) if selected else ready
+            revisions = (
+                {"approved_providers": approved}
+                if approved
+                else None
+            )
+            result = self.pass_b.begin_conversation(
+                clean,
+                founder_revisions=revisions,
+            )
             self._new_project_intake = False
             return result
 
@@ -399,7 +597,33 @@ class KeeperDesktopController(QObject):
             if self._new_project_intake or not project_id
             else lambda: self.pass_b.continue_conversation(project_id, clean)
         )
-        self._run("Keeper recorded the conversation", operation)
+        self._run_conversation(
+            "Keeper is developing the request",
+            "Keeper recorded the conversation",
+            operation,
+        )
+
+    @Slot(str)
+    def selectConversationProvider(self, provider_id: str) -> None:
+        selected = provider_id.strip().lower()
+        available = {
+            str(item.get("provider_id", "")).lower()
+            for item in self._state.get("settings", {}).get(
+                "conversationProviders", []
+            )
+        }
+        if selected not in available:
+            self._fail(
+                "The selected primary agent does not have a qualified READY session."
+            )
+            return
+
+        def save() -> None:
+            routing = self.application.store.get("settings", "routing") or {}
+            routing["conversation_provider_id"] = selected
+            self.application.store.upsert("settings", "routing", routing)
+
+        self._run(f"{selected} selected as the primary agent", save)
 
     @Slot()
     def approveCurrentCharter(self) -> None:
@@ -408,14 +632,58 @@ class KeeperDesktopController(QObject):
         if not project_id or not approval:
             self._fail("There is no current charter awaiting Founder approval.")
             return
-        self._run(
-            "Founder-approved charter activated and planned",
-            lambda: self.pass_b.approve_and_plan_current_charter(
-                project_id,
-                expected_charter_id=str(approval.get("charter_id")),
-                expected_charter_revision=int(approval.get("revision")),
-            ),
-        )
+        if self._busy:
+            return
+        self._busy = True
+        self._status = "Waiting for Founder authentication"
+        self._error = ""
+        self.busyChanged.emit()
+        self.statusChanged.emit()
+
+        def worker() -> None:
+            try:
+                outcome = self.pass_b.approve_and_plan_current_charter(
+                    project_id,
+                    expected_charter_id=str(approval.get("charter_id")),
+                    expected_charter_revision=int(approval.get("revision")),
+                )
+                charter = outcome.get("charter", {})
+                mode = str(charter.get("delegation_mode", "ADVISORY")).upper()
+                if mode in {"DELEGATED", "FULL_DELEGATION"}:
+                    self._status = "Charter approved; Keeper is starting the project"
+                    self.statusChanged.emit()
+                    results = self.pass_b.run_delegated_completion(project_id)
+                    status, error, success = _completion_feedback(results)
+                    self._status = f"Charter approved. {status}"
+                    self._error = error
+                else:
+                    self._status = (
+                        "Advisory charter approved. Keeper will continue helping "
+                        "through conversation without executing material work."
+                    )
+                    self._error = ""
+                    success = True
+            except Exception as error:  # UI boundary reports a safe failure.
+                self._status = "Charter approval paused"
+                self._error = _safe_error_message(error)
+                success = False
+            self._busy = False
+            self.busyChanged.emit()
+            self.statusChanged.emit()
+            try:
+                self._refresh_state_only()
+            except Exception as refresh_error:
+                self._status = "Project started, but the screen could not refresh"
+                self._error = _safe_error_message(refresh_error)
+                success = False
+                self.statusChanged.emit()
+            self.operationFinished.emit(self._status, success)
+
+        threading.Thread(
+            target=worker,
+            name="keeper-charter-approval",
+            daemon=True,
+        ).start()
 
     @Slot()
     def runDelegatedCompletion(self) -> None:
@@ -433,19 +701,24 @@ class KeeperDesktopController(QObject):
 
         def worker() -> None:
             try:
-                self.pass_b.run_delegated_completion(project_id)
+                results = self.pass_b.run_delegated_completion(project_id)
             except Exception as error:  # UI boundary reports a safe failure.
                 self._status = "Completion paused"
-                self._error = str(error)
+                self._error = _safe_error_message(error)
                 success = False
             else:
-                self._status = "Completion advanced to its next durable boundary"
-                success = True
+                self._status, self._error, success = _completion_feedback(results)
             self._busy = False
             self.busyChanged.emit()
             self.statusChanged.emit()
+            try:
+                self._refresh_state_only()
+            except Exception as refresh_error:
+                self._status = "Workflow advanced, but the screen could not refresh"
+                self._error = _safe_error_message(refresh_error)
+                success = False
+                self.statusChanged.emit()
             self.operationFinished.emit(self._status, success)
-            self.refresh()
 
         threading.Thread(target=worker, name="keeper-completion", daemon=True).start()
 
@@ -456,26 +729,153 @@ class KeeperDesktopController(QObject):
 
     @Slot(str, str, str, str)
     def createTask(self, title: str, objective: str, baseline: str, branch: str) -> None:
-        self._run(
-            "Task created",
-            lambda: self.application.create_task(
+        def create_bound_task() -> object:
+            project_id = self.pass_b.selected_project_id()
+            repository: str | None = None
+            charter_identity: dict[str, object] = {}
+            if project_id:
+                repository = str(self._selected_project_repository(project_id))
+                charter_identity = self._selected_project_charter_identity(
+                    project_id
+                )
+            else:
+                active = self.application.active_project()
+                project_id = f"repository:{active['id']}" if active else None
+                repository = str(active["repository"]) if active else None
+            return self.application.create_task(
                 {
                     "title": title,
                     "objective": objective,
                     "baseline": baseline,
                     "target_branch": branch,
+                    "keeper_project_id": project_id,
+                    "keeper_charter_id": charter_identity.get("charter_id"),
+                    "keeper_charter_revision": charter_identity.get("revision"),
+                    "keeper_founder_approval_record_id": charter_identity.get(
+                        "founder_approval_record_id"
+                    ),
+                    "keeper_founder_approval_identity": charter_identity.get(
+                        "founder_approval_identity"
+                    ),
+                    "repository": repository,
                     "allowed_actions": ["READ", "WRITE", "RUN_TESTS"],
                     "prohibited_actions": ["PUSH", "DEPLOY", "SPEND", "LIVE_TRADING"],
                 }
-            ),
+            )
+
+        self._run(
+            "Task created",
+            create_bound_task,
         )
+
+    @Slot(str, str)
+    def createSimpleTask(self, title: str, objective: str) -> None:
+        clean_title = title.strip()
+        clean_objective = objective.strip()
+        slug = re.sub(r"[^a-z0-9]+", "-", clean_title.lower()).strip("-")
+        branch = f"keeper/{slug or 'task'}-{uuid.uuid4().hex[:8]}"
+        self.createTask(clean_title, clean_objective, "HEAD", branch)
 
     @Slot(str)
     def startTask(self, task_id: str) -> None:
+        def start_bound_task() -> object:
+            task = self.application.store.get("tasks", task_id)
+            if task is None:
+                raise LookupError("task not found")
+            project_id = self.pass_b.selected_project_id()
+            if project_id:
+                repository = self._selected_project_repository(project_id)
+                charter_identity = self._selected_project_charter_identity(
+                    project_id
+                )
+                if (
+                    task.get("keeper_project_id") != project_id
+                    or Path(str(task.get("repository", ""))).resolve()
+                    != repository
+                    or task.get("keeper_charter_id")
+                    != charter_identity["charter_id"]
+                    or task.get("keeper_charter_revision")
+                    != charter_identity["revision"]
+                    or task.get("keeper_founder_approval_record_id")
+                    != charter_identity["founder_approval_record_id"]
+                    or task.get("keeper_founder_approval_identity")
+                    != charter_identity["founder_approval_identity"]
+                ):
+                    raise PermissionError(
+                        "task is not bound to the current approved Keeper charter"
+                    )
+            return self.application.start_task(task_id)
+
         self._run(
             "Task started through the validated workflow service",
-            lambda: self.application.start_task(task_id),
+            start_bound_task,
         )
+
+    def _selected_project_repository(self, project_id: str) -> Path:
+        snapshot = self.pass_b.product_snapshot(project_id)
+        executive = snapshot.get("executive", {})
+        charter = (
+            executive.get("active_charter", {})
+            if isinstance(executive, dict)
+            else {}
+        )
+        workspaces = charter.get("workspaces", ()) if isinstance(charter, dict) else ()
+        if not isinstance(workspaces, (list, tuple)) or len(workspaces) != 1:
+            raise PermissionError(
+                "selected Keeper project must have exactly one approved workspace"
+            )
+        repository = Path(str(workspaces[0])).resolve(strict=True)
+        registered = next(
+            (
+                item
+                for item in self.application.projects()
+                if item.get("protected_original") is True
+                and Path(str(item.get("repository", ""))).resolve()
+                == repository
+            ),
+            None,
+        )
+        if registered is None:
+            raise PermissionError(
+                "selected Keeper project workspace is not a protected registered repository"
+            )
+        return repository
+
+    def _selected_project_charter_identity(
+        self, project_id: str
+    ) -> dict[str, object]:
+        snapshot = self.pass_b.product_snapshot(project_id)
+        executive = snapshot.get("executive", {})
+        charter = (
+            executive.get("active_charter", {})
+            if isinstance(executive, dict)
+            else {}
+        )
+        if not isinstance(charter, dict):
+            raise PermissionError("selected Keeper project has no active charter")
+        identity = {
+            "charter_id": charter.get("charter_id"),
+            "revision": charter.get("revision"),
+            "founder_approval_record_id": charter.get(
+                "founder_approval_record_id"
+            ),
+            "founder_approval_identity": charter.get(
+                "founder_approval_identity"
+            ),
+        }
+        if (
+            not isinstance(identity["charter_id"], str)
+            or not identity["charter_id"]
+            or type(identity["revision"]) is not int
+            or not isinstance(identity["founder_approval_record_id"], str)
+            or not identity["founder_approval_record_id"]
+            or not isinstance(identity["founder_approval_identity"], str)
+            or not identity["founder_approval_identity"]
+        ):
+            raise PermissionError(
+                "selected Keeper project charter approval identity is incomplete"
+            )
+        return identity
 
     @Slot(str)
     def createRepair(self, review_id: str) -> None:
@@ -522,6 +922,13 @@ class KeeperDesktopController(QObject):
     @Slot(str)
     def resolveUncertainExecution(self, assignment_id: str) -> None:
         def dispose() -> object:
+            reconciled = (
+                self.pass_b.reconcile_completed_uncertain_execution(
+                    assignment_id
+                )
+            )
+            if reconciled is not None:
+                return reconciled
             request = (
                 self.pass_b.request_uncertain_execution_disposition_approval(
                     assignment_id
@@ -541,7 +948,7 @@ class KeeperDesktopController(QObject):
             )
 
         self._run(
-            "Founder disposition recorded; possible external effect preserved",
+            "Recovery resolved from authenticated authority state",
             dispose,
         )
 
@@ -651,6 +1058,59 @@ class KeeperDesktopController(QObject):
             self._state = state
             self.stateChanged.emit()
         self.operationFinished.emit(success, True)
+
+    def _run_conversation(
+        self,
+        pending: str,
+        success: str,
+        operation: Callable[[], object],
+    ) -> None:
+        if self._test_fixture:
+            self._run(success, operation)
+            return
+        if self._busy:
+            return
+        self._busy = True
+        self._status, self._error = pending, ""
+        self.busyChanged.emit()
+        self.statusChanged.emit()
+
+        def worker() -> None:
+            try:
+                operation()
+                state = self._build_state()
+            except Exception as error:
+                self._asyncFinished.emit(
+                    None,
+                    "Action could not be completed",
+                    _safe_error_message(error),
+                    False,
+                )
+                return
+            self._asyncFinished.emit(state, success, "", True)
+
+        threading.Thread(
+            target=worker,
+            name="keeper-conversation",
+            daemon=True,
+        ).start()
+
+    @Slot(object, str, str, bool)
+    def _finish_async(
+        self,
+        state: object,
+        status: str,
+        error: str,
+        success: bool,
+    ) -> None:
+        if isinstance(state, dict):
+            self._state = state
+            self.stateChanged.emit()
+        self._busy = False
+        self._status, self._error = status, error
+        self.busyChanged.emit()
+        self.statusChanged.emit()
+        self.operationFinished.emit(status if success else error, success)
 
     def _fail(self, message: str) -> None:
         safe_message = _safe_error_message(message)

@@ -29,7 +29,7 @@ from keeper.pass_b.models import (
 )
 from keeper.pass_b.orchestration import authority_envelope_digest
 from keeper.pass_b.pilot import PilotConversationExecutive
-from keeper.pass_b.providers import LocalMockAdapter
+from keeper.pass_b.providers import AdapterResult, LocalMockAdapter
 from keeper.pass_b.usage_authority import TestUsageResetVerifier
 from tests.keeper.pass_b.test_orchestration import _authorize
 
@@ -177,6 +177,118 @@ def _running(
         write,
         execution_path,
     )
+
+
+def test_signed_completed_execution_reconciles_restart_uncertainty(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, attempt, workspace, write, _ = _running(
+        tmp_path
+    )
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+
+    def reconcile(
+        current_assignment: AssignmentRecord,
+        current_attempt: AttemptRecord,
+        current_workspace: WorkspaceReservationRecord,
+    ) -> AdapterResult:
+        assert current_assignment.assignment_id == assignment.assignment_id
+        assert current_attempt.attempt_id == attempt.attempt_id
+        assert (
+            current_workspace.workspace_reservation_id
+            == workspace.workspace_reservation_id
+        )
+        return AdapterResult(
+            external_execution_id=current_attempt.authority_attempt_id,
+            summary="Authority recovered completed planner assignment.",
+            artifacts=(
+                {
+                    "kind": "structured-report",
+                    "path": None,
+                    "digest": "a" * 64,
+                    "execution_requested": False,
+                },
+            ),
+            usage=None,
+        )
+
+    application.orchestration.completed_execution_reconciler = reconcile
+    evidence = application.reconcile_completed_uncertain_execution(
+        assignment.assignment_id
+    )
+
+    assert evidence is not None
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.COMPLETED
+    assert application.repository.get(
+        AssignmentRecord, assignment.assignment_id
+    ).state == AssignmentState.REVIEW_REQUIRED
+    assert application.repository.get(
+        WorkspaceReservationRecord, workspace.workspace_reservation_id
+    ).state == ReservationState.ACTIVE
+    assert application.repository.get(
+        WriteReservationRecord, write.write_reservation_id
+    ).state == ReservationState.ACTIVE
+    session = application.repository.get(
+        ProviderSessionRecord, assignment.session_id
+    )
+    assert session.state == "READY"
+    assert session.active_assignments == 0
+
+
+def test_nonterminal_authority_state_keeps_execution_uncertain(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, attempt, workspace, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    application.orchestration.completed_execution_reconciler = (
+        lambda current_assignment, current_attempt, current_workspace: None
+    )
+
+    assert (
+        application.reconcile_completed_uncertain_execution(
+            assignment.assignment_id
+        )
+        is None
+    )
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.UNCERTAIN
+    assert application.repository.get(
+        WorkspaceReservationRecord, workspace.workspace_reservation_id
+    ).state == ReservationState.UNCERTAIN
+
+
+def test_recovered_completion_identity_mismatch_fails_closed(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, attempt, _, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    application.orchestration.completed_execution_reconciler = (
+        lambda current_assignment, current_attempt, current_workspace: (
+            AdapterResult(
+                external_execution_id="wrong-authority-attempt",
+                summary="mismatched",
+                artifacts=(),
+                usage=None,
+            )
+        )
+    )
+
+    with pytest.raises(PermissionError, match="identity does not match"):
+        application.reconcile_completed_uncertain_execution(
+            assignment.assignment_id
+        )
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.UNCERTAIN
 
 
 def test_cancel_side_effect_then_exception_is_durably_uncertain(

@@ -47,8 +47,7 @@ ApplicationWindow {
     }
 
     function openAssistant() {
-        if (window.width < 1360) narrowAssistantDialog.open()
-        else assistantDrawer.userOpened = true
+        keeper.navigate("Keeper")
     }
     function currentDelegationMode() {
         if (!keeper.state.project) return "ADVISORY"
@@ -61,9 +60,24 @@ ApplicationWindow {
         return mode === "DELEGATED" || mode === "FULL_DELEGATION"
     }
     function workflowActionText() {
+        if (keeper.busy)
+            return "Working…"
         if (keeper.state.project && keeper.state.project.approvalRequired)
             return "Review Required Approval"
         return delegatedWorkReady() ? "Run Approved Work" : "Enable Approved Work"
+    }
+    function workflowStatusText() {
+        if (keeper.busy)
+            return "Keeper is working on the current approved stage."
+        var stages = keeper.state.workflows || []
+        for (var i = 0; i < stages.length; ++i) {
+            var status = String(stages[i].status || "READY").toUpperCase()
+            if (status !== "READY" && status !== "COMPLETED")
+                return window.text(stages[i].title, "Current stage") + " • " + status.replace(/_/g, " ")
+        }
+        if (stages.length > 0 && stages.every(function(stage) { return String(stage.status || "").toUpperCase() === "COMPLETED" }))
+            return "All approved stages are complete."
+        return stages.length > 0 ? "Ready to start the next approved stage." : "Approve a project charter to create a workflow."
     }
     function handleWorkflowAction() {
         if (keeper.state.project && keeper.state.project.approvalRequired)
@@ -87,6 +101,58 @@ ApplicationWindow {
         return source.filter(function(item) {
             return JSON.stringify(item).toLowerCase().indexOf(query) >= 0
         })
+    }
+    function openSearchResults() {
+        var query = searchQuery.trim().toLowerCase()
+        if (!query) return
+        var destinations = [
+            ["recovery", "Recovery"], ["uncertain", "Recovery"],
+            ["provider", "Providers"], ["task", "Tasks"],
+            ["workflow", "Workflows"], ["evidence", "Evidence"],
+            ["review", "Reviews"], ["finding", "Findings"],
+            ["authorization", "Authorizations"], ["report", "Reports"],
+            ["repository", "Repositories"], ["project", "Projects"]
+        ]
+        for (var i = 0; i < destinations.length; ++i) {
+            if (query.indexOf(destinations[i][0]) >= 0) {
+                keeper.navigate(destinations[i][1])
+                return
+            }
+        }
+        var collections = [
+            [keeper.state.project ? keeper.state.project.catalog : [], "Projects"],
+            [keeper.state.workflows || [], "Workflows"],
+            [keeper.state.tasks || [], "Tasks"],
+            [keeper.state.evidence || [], "Evidence"],
+            [keeper.state.evidenceReferences || [], "Evidence"],
+            [keeper.state.runs || [], "Reports"]
+        ]
+        for (var j = 0; j < collections.length; ++j) {
+            if (filtered(collections[j][0]).length > 0) {
+                keeper.navigate(collections[j][1])
+                return
+            }
+        }
+    }
+    function friendlyRecord(record) {
+        var value = record || {}
+        var preferred = ["title", "name", "status", "state", "stage", "role",
+                         "objective", "summary", "reason", "detail", "capability",
+                         "task_id", "run_id", "project_id", "branch", "category"]
+        var seen = ({})
+        var lines = []
+        function add(key) {
+            if (seen[key] || value[key] === undefined || value[key] === null || value[key] === "") return
+            seen[key] = true
+            var label = key.replace(/_/g, " ")
+            label = label.charAt(0).toUpperCase() + label.slice(1)
+            var content = value[key]
+            if (typeof content === "object") content = JSON.stringify(content, null, 2)
+            lines.push(label + ": " + content)
+        }
+        for (var i = 0; i < preferred.length; ++i) add(preferred[i])
+        Object.keys(value).forEach(add)
+        return lines.length > 0 ? lines.join("\n\n") : "No additional details are available."
     }
     function filteredProjects() {
         var source = filtered(keeper.state.project ? keeper.state.project.catalog : [])
@@ -489,6 +555,7 @@ ApplicationWindow {
                         color: textPrimary
                         placeholderTextColor: "#777777"
                         onTextChanged: window.searchQuery = text
+                        onAccepted: window.openSearchResults()
                         background: Rectangle { color: "#121414"; radius: 5; border.color: parent.activeFocus ? gold : "#3A3C3B" }
                     }
                     QuietButton { objectName: "refreshButton"; text: "Refresh"; onClicked: keeper.refresh() }
@@ -515,7 +582,7 @@ ApplicationWindow {
                         contentWidth: width; contentHeight: overviewColumn.implicitHeight + 48; clip: true
                         ColumnLayout {
                             id: overviewColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
-                            PageHeader { title: "Overview"; subtitle: "Projects, work, and verified safety state at a glance."; actionText: "+ Describe a Project"; onAction: { keeper.startNewProject(); window.openAssistant(); keeper.navigate("Overview") } }
+                            PageHeader { title: "Overview"; subtitle: "Tell Keeper what you want to build. Keeper handles the approved project from there."; actionText: "+ Talk to Keeper"; onAction: { keeper.startNewProject(); window.openAssistant() } }
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 112
@@ -564,7 +631,7 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                            RowLayout { Layout.fillWidth: true; BodyText { text: "Active project" } ComboBox { id: projectSelector; Layout.fillWidth: true; Layout.minimumWidth: 180; Layout.maximumWidth: 520; model: keeper.state.project ? keeper.state.project.catalog || [] : []; textRole: "title"; valueRole: "project_id"; onActivated: keeper.selectProject(currentValue); contentItem: Text { leftPadding: 12; rightPadding: 12; text: projectSelector.displayText || "No active Keeper project"; color: textPrimary; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle; clip: true } background: Rectangle { color: "#101212"; border.color: projectSelector.activeFocus ? gold : "#393B3A"; radius: 4 } } QuietButton { text: "+ New Task"; enabled: (keeper.state.projects || []).length > 0; onClicked: taskDialog.open() } Item { Layout.fillWidth: true } }
+                            RowLayout { Layout.fillWidth: true; BodyText { text: "Active project" } ComboBox { id: projectSelector; Layout.fillWidth: true; Layout.minimumWidth: 180; Layout.maximumWidth: 520; model: keeper.state.project ? keeper.state.project.catalog || [] : []; textRole: "title"; valueRole: "project_id"; onActivated: keeper.selectProject(currentValue); contentItem: Text { leftPadding: 12; rightPadding: 12; text: projectSelector.displayText || "No active Keeper project"; color: textPrimary; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle; clip: true } background: Rectangle { color: "#101212"; border.color: projectSelector.activeFocus ? gold : "#393B3A"; radius: 4 } } QuietButton { text: "Talk to Keeper"; onClicked: window.openAssistant() } Item { Layout.fillWidth: true } }
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 12
                                 Repeater {
@@ -588,7 +655,7 @@ ApplicationWindow {
                                     Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#2B2D2C" }
                                     MutedText { text: "Every launch remains bound to the active charter and verified provider identity."; Layout.fillWidth: true }
                                     Item { Layout.fillHeight: true }
-                                    GoldButton { text: keeper.state.project && keeper.state.project.approvalRequired ? "Review Founder Approval" : "Open Workflows"; onClicked: keeper.navigate(keeper.state.project && keeper.state.project.approvalRequired ? "Projects" : "Workflows") }
+                                    GoldButton { text: keeper.state.project && keeper.state.project.approvalRequired ? "Review Founder Approval" : "Continue with Keeper"; onClicked: { if (keeper.state.project && keeper.state.project.approvalRequired) charterDialog.open(); else window.openAssistant() } }
                                 }
                                 KPanel {
                                     Layout.fillWidth: true; Layout.preferredHeight: 320
@@ -623,11 +690,166 @@ ApplicationWindow {
                         }
                     }
 
+                    Item {
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 24
+                            spacing: 16
+                            PageHeader {
+                                title: "Keeper"
+                                subtitle: "Talk naturally about what you want. Keeper develops the idea and carries out the approved project."
+                                actionText: "+ New Project"
+                                onAction: {
+                                    keeper.startNewProject()
+                                    keeperChatInput.forceActiveFocus()
+                                }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+                                BodyText { text: "Primary agent"; font.weight: Font.DemiBold }
+                                ComboBox {
+                                    id: conversationProviderSelector
+                                    objectName: "conversationProviderSelector"
+                                    Layout.preferredWidth: 280
+                                    model: keeper.state.settings ? keeper.state.settings.conversationProviders || [] : []
+                                    textRole: "name"
+                                    valueRole: "provider_id"
+                                    currentIndex: {
+                                        var selected = keeper.state.settings ? keeper.state.settings.conversationProvider || "" : ""
+                                        for (var i = 0; i < model.length; ++i)
+                                            if (model[i].provider_id === selected) return i
+                                        return model.length > 0 ? 0 : -1
+                                    }
+                                    enabled: model.length > 0 && !keeper.busy
+                                    onActivated: keeper.selectConversationProvider(currentValue)
+                                }
+                                StatusPill {
+                                    value: conversationProviderSelector.currentIndex >= 0 ? "READY" : "UNAVAILABLE"
+                                }
+                                MutedText {
+                                    Layout.fillWidth: true
+                                    text: conversationProviderSelector.currentIndex >= 0
+                                        ? "Keeper will prefer this agent for project work and use another approved agent for independent review."
+                                        : "No Authority-qualified provider is ready."
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                            KPanel {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                SectionTitle { text: "CONVERSATION" }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    MutedText {
+                                        Layout.fillWidth: true
+                                        text: keeperChatList.followingNewest
+                                            ? "Showing the newest message"
+                                            : "You are viewing an earlier part of the conversation"
+                                    }
+                                    QuietButton {
+                                        visible: !keeperChatList.followingNewest
+                                        text: "Jump to newest"
+                                        onClicked: {
+                                            keeperChatList.followingNewest = true
+                                            keeperChatList.positionViewAtEnd()
+                                        }
+                                    }
+                                }
+                                ListView {
+                                    id: keeperChatList
+                                    objectName: "keeperChatList"
+                                    property bool followingNewest: true
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    clip: true
+                                    spacing: 10
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    model: keeper.state.timeline || []
+                                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                                    onCountChanged: {
+                                        if (followingNewest)
+                                            Qt.callLater(function() { keeperChatList.positionViewAtEnd() })
+                                    }
+                                    onContentYChanged: {
+                                        if (moving && !atYEnd)
+                                            followingNewest = false
+                                        else if (atYEnd)
+                                            followingNewest = true
+                                    }
+                                    Component.onCompleted: Qt.callLater(function() { keeperChatList.positionViewAtEnd() })
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: Math.min(keeperChatList.width * 0.84, 860)
+                                        x: modelData.kind === "founder" ? keeperChatList.width - width - 12 : 12
+                                        implicitHeight: keeperChatMessage.implicitHeight + 54
+                                        radius: 9
+                                        color: modelData.kind === "founder" ? "#252626" : "#151817"
+                                        border.color: modelData.kind === "founder" ? "#4B4B48" : goldDim
+                                        ColumnLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 14
+                                            spacing: 5
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: window.text(modelData.title, modelData.kind === "founder" ? "Founder" : "Keeper")
+                                                color: modelData.kind === "founder" ? textMuted : goldBright
+                                                font.pixelSize: 11
+                                                font.weight: Font.Bold
+                                            }
+                                            Text {
+                                                id: keeperChatMessage
+                                                Layout.fillWidth: true
+                                                text: window.text(modelData.body, "")
+                                                color: textPrimary
+                                                font.pixelSize: 14
+                                                wrapMode: Text.Wrap
+                                                textFormat: Text.PlainText
+                                            }
+                                        }
+                                    }
+                                    EmptyState {
+                                        anchors.fill: parent
+                                        visible: parent.count === 0
+                                        title: "What do you want to make?"
+                                        detail: "Describe it in your own words. Keeper will develop the idea with you and prepare the project."
+                                    }
+                                }
+                                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 10
+                                    TextArea {
+                                        id: keeperChatInput
+                                        objectName: "keeperChatInput"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 92
+                                        placeholderText: "Tell Keeper what you want to build or change…"
+                                        color: textPrimary
+                                        placeholderTextColor: "#777777"
+                                        wrapMode: TextEdit.Wrap
+                                        background: Rectangle { color: "#111313"; border.color: parent.activeFocus ? gold : "#3A3C3A"; radius: 6 }
+                                    }
+                                    GoldButton {
+                                        objectName: "keeperChatSend"
+                                        text: keeper.busy ? "Working…" : "Send"
+                                        enabled: keeperChatInput.text.trim().length > 0 && !keeper.busy
+                                        onClicked: {
+                                            keeperChatList.followingNewest = true
+                                            keeper.sendAssistantMessage(keeperChatInput.text)
+                                            keeperChatInput.clear()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Flickable {
                         contentWidth: width; contentHeight: projectColumn.implicitHeight + 48; clip: true
                         ColumnLayout {
                             id: projectColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
-                            PageHeader { title: "Projects & Charters"; subtitle: "Founder intent, current charter, and execution boundaries."; actionText: "+ New Project"; onAction: { keeper.startNewProject(); window.openAssistant(); keeper.navigate("Overview") } }
+                            PageHeader { title: "Projects & Charters"; subtitle: "Founder intent, current charter, and execution boundaries."; actionText: "+ New Project"; onAction: { keeper.startNewProject(); window.openAssistant() } }
                             RowLayout { Layout.fillWidth: true; Item { Layout.fillWidth: true } BodyText { text: "Project state" } ComboBox { id: projectStateSelector; Layout.preferredWidth: 230; model: ["ALL", "INTAKE", "CLARIFICATION_REQUIRED", "CHARTER_DRAFT", "AWAITING_CHARTER_APPROVAL", "ACTIVE", "PLANNING", "EXECUTING", "REVIEWING", "BLOCKED", "PAUSED", "WAITING_FOR_PROVIDER", "WAITING_FOR_USAGE_RESET", "WAITING_FOR_FOUNDER", "WAITING_FOR_CREDENTIAL", "WAITING_FOR_EXTERNAL_SYSTEM", "COMPLETED", "CANCELED", "FAILED", "RECOVERY_REQUIRED", "UNKNOWN"]; onActivated: window.projectStateFilter = currentText } }
                             KPanel {
                                 Layout.fillWidth: true; Layout.preferredHeight: 230
@@ -650,7 +872,7 @@ ApplicationWindow {
                                 MutedText { text: keeper.state.project && keeper.state.project.charterRevision ? "Revision " + keeper.state.project.charterRevision : "A charter has not been approved." }
                                 BodyText { Layout.fillWidth: true; text: keeper.state.project && keeper.state.project.charter && keeper.state.project.charter.objective ? keeper.state.project.charter.objective : "The approved scope, exclusions, constraints, providers, and delegated envelope appear here." }
                                 Item { Layout.fillHeight: true }
-                                RowLayout { QuietButton { text: "Discuss / Revise"; onClicked: { window.openAssistant(); keeper.navigate("Overview") } } GoldButton { objectName: "approveCharterButton"; visible: keeper.state.project && keeper.state.project.approvalRequired; text: "Review & Approve Charter"; onClicked: charterDialog.open() } }
+                                RowLayout { QuietButton { text: "Discuss / Revise"; onClicked: window.openAssistant() } GoldButton { objectName: "approveCharterButton"; visible: keeper.state.project && keeper.state.project.approvalRequired; text: "Review & Approve Charter"; onClicked: charterDialog.open() } }
                             }
                         }
                     }
@@ -676,7 +898,7 @@ ApplicationWindow {
                                 BodyText { Layout.fillWidth: true; text: "This project is in Advisory mode. Keeper can show the plan, but it cannot run a provider until you approve Delegated mode." }
                                 MutedText { Layout.fillWidth: true; text: "Choose Enable Approved Work above. Keeper will prepare the one required revision and clearly show the Founder approval step." }
                             }
-                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "ACTIVE WORKFLOW" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 10; model: filtered(keeper.state.workflows || []); delegate: Rectangle { width: ListView.view.width; height: 82; radius: 6; color: workflowMouse.containsMouse ? "#1B1D1C" : "#121414"; border.color: statusColor(modelData.status); RowLayout { anchors.fill: parent; anchors.margins: 14; Rectangle { Layout.preferredWidth: 42; Layout.preferredHeight: 42; radius: 21; color: "#2D2513"; Text { anchors.centerIn: parent; text: index + 1; color: goldBright; font.pixelSize: 18 } } ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, "Work item"); font.weight: Font.DemiBold; elide: Text.ElideRight; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Role: " + window.text(modelData.role, "unassigned"); elide: Text.ElideRight; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "PROPOSED") } QuietButton { text: "Stage details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } MouseArea { id: workflowMouse; anchors.fill: parent; hoverEnabled: true; z: -1; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No workflow planned"; detail: "Approve the proposed charter once. Keeper will then plan and advance routine work inside its delegated envelope." } } }
+                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "ACTIVE WORKFLOW" } MutedText { Layout.fillWidth: true; text: window.workflowStatusText(); wrapMode: Text.WordWrap } ListView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 10; model: filtered(keeper.state.workflows || []); delegate: Rectangle { width: ListView.view.width; height: 82; radius: 6; color: workflowMouse.containsMouse ? "#1B1D1C" : "#121414"; border.color: statusColor(modelData.status); RowLayout { anchors.fill: parent; anchors.margins: 14; Rectangle { Layout.preferredWidth: 42; Layout.preferredHeight: 42; radius: 21; color: "#2D2513"; Text { anchors.centerIn: parent; text: index + 1; color: goldBright; font.pixelSize: 18 } } ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, "Work item"); font.weight: Font.DemiBold; elide: Text.ElideRight; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Role: " + window.text(modelData.role, "unassigned"); elide: Text.ElideRight; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "PROPOSED") } QuietButton { text: "Stage details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } MouseArea { id: workflowMouse; anchors.fill: parent; hoverEnabled: true; z: -1; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No workflow planned"; detail: "Approve the proposed charter once. Keeper will then plan and advance routine work inside its delegated envelope." } } }
                         }
                     }
 
@@ -684,7 +906,7 @@ ApplicationWindow {
                         contentWidth: width; contentHeight: taskColumn.implicitHeight + 48; clip: true
                         ColumnLayout {
                             id: taskColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
-                            PageHeader { title: "Tasks"; subtitle: "Bounded implementation and verification tasks."; actionText: "+ New Task"; actionEnabled: (keeper.state.projects || []).length > 0; onAction: taskDialog.open() }
+                            PageHeader { title: "Tasks"; subtitle: "Keeper creates these from your approved conversation. Manual task entry is an advanced fallback."; actionText: "Advanced: Add Task"; actionEnabled: (keeper.state.projects || []).length > 0; onAction: taskDialog.open() }
                             KPanel {
                                 Layout.fillWidth: true; Layout.preferredHeight: 520
                                 SectionTitle { text: "TASK QUEUE" }
@@ -894,7 +1116,7 @@ ApplicationWindow {
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 380; SectionTitle { text: "RECOVERY RECORDS" }
                                 ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: recoveryRows(); clip: true
                                     delegate: Rectangle { width: ListView.view.width; height: 78; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
-                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, modelData.run_id); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.reason, "Recovery state requires inspection") } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { visible: String(modelData.source || "") === "pass_b_uncertain_execution"; text: "Founder disposition"; onClicked: keeper.resolveUncertainExecution(modelData.assignment_id) } GoldButton { visible: String(modelData.source || "") !== "pass_b_uncertain_execution"; text: "Resume"; enabled: !!modelData.run_id && String(modelData.status || "").toUpperCase() !== "UNCERTAIN"; onClicked: keeper.runAction(modelData.run_id, "resume") } }
+                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, modelData.run_id); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.reason, "Recovery state requires inspection") } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { visible: String(modelData.source || "") === "pass_b_uncertain_execution"; text: "Resolve safely"; onClicked: keeper.resolveUncertainExecution(modelData.assignment_id) } GoldButton { visible: String(modelData.source || "") !== "pass_b_uncertain_execution"; text: "Resume"; enabled: !!modelData.run_id && String(modelData.status || "").toUpperCase() !== "UNCERTAIN"; onClicked: keeper.runAction(modelData.run_id, "resume") } }
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No recovery action required"; detail: "Keeper currently has no source-backed interrupted or uncertain run requiring attention." }
                                 }
@@ -928,7 +1150,7 @@ ApplicationWindow {
                 Rectangle {
                     id: assistantDrawer
                     objectName: "assistantDrawer"
-                    property bool userOpened: true
+                    property bool userOpened: false
                     readonly property bool opened: userOpened && window.width >= 1360
                     Layout.preferredWidth: opened ? 330 : 44
                     Layout.fillHeight: true
@@ -943,7 +1165,7 @@ ApplicationWindow {
                             BodyText { visible: assistantDrawer.opened; Layout.fillWidth: true; text: "Keeper Assistant"; font.pixelSize: 17; font.weight: Font.DemiBold }
                             QuietButton { objectName: "assistantToggle"; text: assistantDrawer.opened ? "×" : "◀"; implicitWidth: 36; onClicked: { if (window.width < 1360) narrowAssistantDialog.open(); else assistantDrawer.userOpened = !assistantDrawer.userOpened } }
                         }
-                        MutedText { visible: assistantDrawer.opened; Layout.fillWidth: true; text: "Describe outcomes, clarify charter scope, and follow durable workflow progress." }
+                        MutedText { visible: assistantDrawer.opened; Layout.fillWidth: true; text: "Describe what you want. Keeper develops the idea with you, prepares the charter, and carries out the approved project."; wrapMode: Text.WordWrap }
                         Rectangle { visible: assistantDrawer.opened; Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
                         ListView {
                             visible: assistantDrawer.opened
@@ -954,7 +1176,7 @@ ApplicationWindow {
                                 color: modelData.kind === "founder" ? "#242525" : "#171A18"; border.color: modelData.kind === "founder" ? "#4B4B48" : goldDim
                                 Text { id: message; anchors.fill: parent; anchors.margins: 14; text: modelData.body; color: textPrimary; font.pixelSize: 12; wrapMode: Text.Wrap; textFormat: Text.PlainText }
                             }
-                            EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "Ready when you are"; detail: "Describe a project outcome. Keeper will turn it into a proposed charter before any execution." }
+                            EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "What do you want to make?"; detail: "Talk naturally. Keeper will ask questions, prepare the project, and guide you through the one required approval." }
                         }
                         RowLayout {
                             visible: assistantDrawer.opened
@@ -963,11 +1185,11 @@ ApplicationWindow {
                                 id: assistantInput
                                 objectName: "assistantInput"
                                 Layout.fillWidth: true; Layout.preferredHeight: 72
-                                placeholderText: "Describe a project or ask Keeper…"
+                                placeholderText: "Tell Keeper what you want to build…"
                                 color: textPrimary; placeholderTextColor: "#777777"; wrapMode: TextEdit.Wrap
                                 background: Rectangle { color: "#141616"; border.color: parent.activeFocus ? gold : "#3A3C3A"; radius: 5 }
                             }
-                            GoldButton { objectName: "assistantSend"; text: "Send"; enabled: assistantInput.text.trim().length > 0; onClicked: { keeper.sendAssistantMessage(assistantInput.text); assistantInput.clear() } }
+                            GoldButton { objectName: "assistantSend"; text: keeper.busy ? "Working…" : "Send"; enabled: assistantInput.text.trim().length > 0 && !keeper.busy; onClicked: { keeper.sendAssistantMessage(assistantInput.text); assistantInput.clear() } }
                         }
                     }
                 }
@@ -993,7 +1215,7 @@ ApplicationWindow {
         background: Rectangle { color: panelRaised; border.color: goldDim; radius: 8 }
         contentItem: ColumnLayout {
             spacing: 10
-            MutedText { Layout.fillWidth: true; text: "Describe outcomes, clarify charter scope, and follow durable workflow progress."; wrapMode: Text.Wrap }
+            MutedText { Layout.fillWidth: true; text: "Describe what you want. Keeper develops the idea with you, prepares the charter, and carries out the approved project."; wrapMode: Text.Wrap }
             ListView {
                 Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 8
                 model: keeper.state.timeline || []
@@ -1002,17 +1224,17 @@ ApplicationWindow {
                     color: modelData.kind === "founder" ? "#242525" : "#171A18"; border.color: modelData.kind === "founder" ? "#4B4B48" : goldDim
                     Text { id: narrowMessage; anchors.fill: parent; anchors.margins: 14; text: modelData.body; color: textPrimary; font.pixelSize: 12; wrapMode: Text.Wrap; textFormat: Text.PlainText }
                 }
-                EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "Ready when you are"; detail: "Describe a project outcome. Keeper will draft a proposed charter before any execution." }
+                EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "What do you want to make?"; detail: "Talk naturally. Keeper will ask questions, prepare the project, and guide you through the one required approval." }
             }
             TextArea {
                 id: narrowAssistantInput
                 objectName: "narrowAssistantInput"
                 Layout.fillWidth: true; Layout.preferredHeight: 90
-                placeholderText: "Describe a project or ask Keeper…"
+                placeholderText: "Tell Keeper what you want to build…"
                 color: textPrimary; placeholderTextColor: "#777777"; wrapMode: TextEdit.Wrap
                 background: Rectangle { color: "#141616"; border.color: parent.activeFocus ? gold : "#3A3C3A"; radius: 5 }
             }
-            GoldButton { objectName: "narrowAssistantSend"; Layout.alignment: Qt.AlignRight; text: "Send"; enabled: narrowAssistantInput.text.trim().length > 0; onClicked: { keeper.sendAssistantMessage(narrowAssistantInput.text); narrowAssistantInput.clear() } }
+            GoldButton { objectName: "narrowAssistantSend"; Layout.alignment: Qt.AlignRight; text: keeper.busy ? "Working…" : "Send"; enabled: narrowAssistantInput.text.trim().length > 0 && !keeper.busy; onClicked: { keeper.sendAssistantMessage(narrowAssistantInput.text); narrowAssistantInput.clear() } }
         }
     }
 
@@ -1033,7 +1255,7 @@ ApplicationWindow {
             MutedText { Layout.fillWidth: true; text: "Revision " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.revision : "", "unknown") + "  •  Mode: " + window.currentDelegationMode(); horizontalAlignment: Text.AlignHCenter }
             MutedText { Layout.fillWidth: true; text: "Approved providers: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.approved_providers : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
             MutedText { Layout.fillWidth: true; text: "Constraints: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.constraints : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
-            MutedText { Layout.fillWidth: true; text: "Approval invokes the production Founder authenticator and binds only the exact displayed charter revision. Routine work inside that charter proceeds without repeated approval."; horizontalAlignment: Text.AlignHCenter }
+            MutedText { Layout.fillWidth: true; text: "After authentication, Keeper chooses the safest effective plan and keeps the project moving inside this charter without asking you to manage tasks or workflows."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
             RowLayout { Layout.alignment: Qt.AlignHCenter; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; onClicked: { charterDialog.close(); keeper.approveCurrentCharter() } } }
         }
     }
@@ -1067,9 +1289,9 @@ ApplicationWindow {
     }
 
     Dialog {
-        id: taskDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Create Bounded Task"; standardButtons: Dialog.NoButton
+        id: taskDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Create a Task"; standardButtons: Dialog.NoButton
         background: Rectangle { color: panelRaised; border.color: goldDim; radius: 7 }
-        contentItem: ColumnLayout { spacing: 9; BodyText { text: "Title" } TextField { id: taskTitle; Layout.fillWidth: true; color: textPrimary; background: Rectangle { color: "#111111"; border.color: "#444444" } } BodyText { text: "Objective" } TextArea { id: taskObjective; Layout.fillWidth: true; Layout.preferredHeight: 90; color: textPrimary; wrapMode: TextEdit.Wrap; background: Rectangle { color: "#111111"; border.color: "#444444" } } RowLayout { Layout.fillWidth: true; ColumnLayout { Layout.fillWidth: true; BodyText { text: "Baseline" } TextField { id: taskBaseline; Layout.fillWidth: true; text: "HEAD"; color: textPrimary; background: Rectangle { color: "#111111"; border.color: "#444444" } } } ColumnLayout { Layout.fillWidth: true; BodyText { text: "Target branch" } TextField { id: taskBranch; Layout.fillWidth: true; text: "feature/keeper-task"; color: textPrimary; background: Rectangle { color: "#111111"; border.color: "#444444" } } } } MutedText { text: "Push, deployment, spending, destructive actions, and live trading remain prohibited."; color: warning } RowLayout { Layout.alignment: Qt.AlignRight; QuietButton { text: "Cancel"; onClicked: taskDialog.close() } GoldButton { objectName: "confirmCreateTask"; text: "Create Task"; enabled: taskTitle.text.length > 0 && taskObjective.text.length > 0; onClicked: { keeper.createTask(taskTitle.text, taskObjective.text, taskBaseline.text, taskBranch.text); taskDialog.close() } } } }
+        contentItem: ColumnLayout { spacing: 9; MutedText { Layout.fillWidth: true; text: "Tell Keeper what you want done. Keeper will use the current repository and create a safe local branch for you."; wrapMode: Text.WordWrap } BodyText { text: "Task name" } TextField { id: taskTitle; Layout.fillWidth: true; placeholderText: "Example: Clean up the workflow screen"; color: textPrimary; background: Rectangle { color: "#111111"; border.color: "#444444" } } BodyText { text: "What should Keeper do?" } TextArea { id: taskObjective; Layout.fillWidth: true; Layout.preferredHeight: 110; placeholderText: "Describe the result you want and anything Keeper must not change."; color: textPrimary; wrapMode: TextEdit.Wrap; background: Rectangle { color: "#111111"; border.color: "#444444" } } MutedText { Layout.fillWidth: true; text: "Nothing will be committed, pushed, deployed, published, or purchased without your approval."; color: warning; wrapMode: Text.WordWrap } RowLayout { Layout.alignment: Qt.AlignRight; QuietButton { text: "Cancel"; onClicked: taskDialog.close() } GoldButton { objectName: "confirmCreateTask"; text: "Add Task"; enabled: taskTitle.text.trim().length > 0 && taskObjective.text.trim().length > 0; onClicked: { keeper.createSimpleTask(taskTitle.text, taskObjective.text); taskDialog.close() } } } }
     }
 
     Dialog {
@@ -1077,10 +1299,10 @@ ApplicationWindow {
         anchors.centerIn: parent
         width: Math.min(760, window.width - 80)
         modal: true
-        title: "Durable record details"
+        title: "Keeper details"
         standardButtons: Dialog.Close
         background: Rectangle { color: panelRaised; border.color: goldDim; radius: 7 }
-        contentItem: ScrollView { implicitHeight: 440; TextArea { readOnly: true; text: JSON.stringify(window.selectedRecord || {}, null, 2); color: textPrimary; wrapMode: TextEdit.WrapAnywhere; background: Rectangle { color: "#101212"; border.color: "#333534" } } }
+        contentItem: ScrollView { implicitHeight: 440; TextArea { readOnly: true; text: (keeper.state.settings && keeper.state.settings.developerDetails) ? JSON.stringify(window.selectedRecord || {}, null, 2) : window.friendlyRecord(window.selectedRecord); color: textPrimary; wrapMode: TextEdit.WrapAnywhere; background: Rectangle { color: "#101212"; border.color: "#333534" } } }
     }
 
     FileDialog {

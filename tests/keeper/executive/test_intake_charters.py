@@ -88,6 +88,34 @@ def test_natural_language_intake_tracks_provenance_and_assumptions(tmp_path: Pat
     assert "success" in result.unresolved_questions[0].lower()
 
 
+def test_intake_proposes_full_delegation_for_conversation_first_projects() -> None:
+    result = ConversationIntake().extract(
+        "Build a small application called Pocket List for tracking chores."
+    )
+
+    assert result.explicit("delegation_mode") == "FULL_DELEGATION"
+    assert result.fields["delegation_mode"].provenance == "PROPOSED_ASSUMPTION"
+    assert any(
+        "inside its approved boundaries" in assumption
+        for assumption in result.proposed_assumptions
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Build it for me.",
+        "Make it happen.",
+        "Do what you think is best.",
+    ),
+)
+def test_intake_recognizes_natural_full_delegation_phrases(message: str) -> None:
+    result = ConversationIntake().extract(message)
+
+    assert result.explicit("delegation_mode") == "FULL_DELEGATION"
+    assert result.fields["delegation_mode"].provenance == "EXPLICIT"
+
+
 def test_intake_accepts_explicit_success_criteria_and_audience() -> None:
     result = ConversationIntake().extract(
         "Create a software application called Keeper Acceptance in "

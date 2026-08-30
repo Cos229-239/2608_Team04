@@ -141,6 +141,15 @@ class UncertainExecutionFinalizer(Protocol):
     ) -> dict[str, object]: ...
 
 
+class CompletedExecutionReconciler(Protocol):
+    def __call__(
+        self,
+        assignment: AssignmentRecord,
+        attempt: AttemptRecord,
+        workspace: WorkspaceReservationRecord,
+    ) -> AdapterResult | None: ...
+
+
 class OrchestrationService:
     def __init__(
         self,
@@ -154,6 +163,9 @@ class OrchestrationService:
         recovery_action_authority: RecoveryActionAuthority | None = None,
         uncertain_execution_observer: UncertainExecutionObserver | None = None,
         uncertain_execution_finalizer: UncertainExecutionFinalizer | None = None,
+        completed_execution_reconciler: (
+            CompletedExecutionReconciler | None
+        ) = None,
     ) -> None:
         self.repository = repository
         self.clock = clock or (lambda: datetime.now(UTC))
@@ -171,7 +183,62 @@ class OrchestrationService:
         self.recovery_action_authority = recovery_action_authority
         self.uncertain_execution_observer = uncertain_execution_observer
         self.uncertain_execution_finalizer = uncertain_execution_finalizer
+        self.completed_execution_reconciler = completed_execution_reconciler
         self.adapters: dict[str, ProviderAdapter] = {}
+
+    def reconcile_completed_uncertain_execution(
+        self, assignment_id: str
+    ) -> EvidenceBundleRecord | None:
+        """Accept only an exact signed completion missed during restart."""
+
+        assignment = self.repository.get(AssignmentRecord, assignment_id)
+        attempts = [
+            item
+            for item in self.repository.list(AttemptRecord)
+            if item.assignment_id == assignment.assignment_id
+            and item.state == AttemptState.UNCERTAIN
+            and item.uncertainty_kind
+            == "EXTERNAL_EXECUTION_OUTCOME_AMBIGUOUS"
+        ]
+        workspaces = [
+            item
+            for item in self.repository.list(
+                WorkspaceReservationRecord,
+                project_id=assignment.project_id,
+            )
+            if item.assignment_id == assignment.assignment_id
+            and item.state == ReservationState.UNCERTAIN
+        ]
+        if (
+            assignment.state != AssignmentState.UNCERTAIN
+            or len(attempts) != 1
+            or len(workspaces) != 1
+            or workspaces[0].workspace_reservation_id
+            != attempts[0].workspace_reservation_id
+            or not attempts[0].session_slot_claimed
+        ):
+            raise PermissionError(
+                "assignment has no exact uncertain external execution"
+            )
+        reconciler = self.completed_execution_reconciler
+        if reconciler is None:
+            raise PermissionError(
+                "authenticated completion reconciliation is unavailable"
+            )
+        result = reconciler(assignment, attempts[0], workspaces[0])
+        if result is None:
+            return None
+        if result.external_execution_id != attempts[0].authority_attempt_id:
+            raise PermissionError(
+                "recovered completion identity does not match the attempt"
+            )
+        evidence = self._evidence(assignment, attempts[0], result)
+        self.repository.reconcile_completed_attempt(
+            attempts[0].attempt_id,
+            evidence,
+            self._now(),
+        )
+        return evidence
 
     def register_provider(
         self,

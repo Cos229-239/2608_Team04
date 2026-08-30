@@ -3866,6 +3866,163 @@ class PassBRepository:
             self._consume_usage(connection, assignment.assignment_id, completed_at)
         return updated_attempt
 
+    def reconcile_completed_attempt(
+        self,
+        attempt_id: str,
+        evidence: EvidenceBundleRecord,
+        completed_at: str,
+    ) -> AttemptRecord:
+        """Atomically adopt an authenticated completion missed on restart."""
+
+        with self.store.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            attempt = self._get(connection, AttemptRecord, attempt_id)
+            assignment = self._get(
+                connection, AssignmentRecord, attempt.assignment_id
+            )
+            work_item = self._get(
+                connection, WorkItemRecord, assignment.work_item_id
+            )
+            workflow = self._get(
+                connection, WorkflowRecord, assignment.workflow_id
+            )
+            _validate_assignment_binding(workflow, work_item, assignment)
+            session = self._get(
+                connection, ProviderSessionRecord, assignment.session_id
+            )
+            workspaces = [
+                self._decode(WorkspaceReservationRecord, row)
+                for row in connection.execute(
+                    "SELECT payload,payload_hash FROM pass_b_records "
+                    "WHERE kind=? AND state='UNCERTAIN'",
+                    (WorkspaceReservationRecord.KIND,),
+                ).fetchall()
+            ]
+            workspaces = [
+                item
+                for item in workspaces
+                if item.assignment_id == assignment.assignment_id
+            ]
+            writes = [
+                self._decode(WriteReservationRecord, row)
+                for row in connection.execute(
+                    "SELECT payload,payload_hash FROM pass_b_records "
+                    "WHERE kind=? AND state='UNCERTAIN'",
+                    (WriteReservationRecord.KIND,),
+                ).fetchall()
+            ]
+            writes = [
+                item
+                for item in writes
+                if item.assignment_id == assignment.assignment_id
+            ]
+            if (
+                attempt.state != AttemptState.UNCERTAIN
+                or attempt.uncertainty_kind
+                != "EXTERNAL_EXECUTION_OUTCOME_AMBIGUOUS"
+                or assignment.state != AssignmentState.UNCERTAIN
+                or evidence.attempt_id != attempt.attempt_id
+                or evidence.assignment_id != assignment.assignment_id
+                or evidence.project_id != assignment.project_id
+                or evidence.producer_provider_id != assignment.provider_id
+                or evidence.producer_session_id != assignment.session_id
+                or evidence.state != EvidenceState.UNTRUSTED
+                or not attempt.session_slot_claimed
+                or session.active_assignments < 1
+                or len(workspaces) != 1
+                or workspaces[0].workspace_reservation_id
+                != attempt.workspace_reservation_id
+            ):
+                raise PermissionError(
+                    "completed uncertainty reconciliation binding is invalid"
+                )
+            self._insert(connection, evidence)
+            remaining = max(0, session.active_assignments - 1)
+            updated_attempt = replace(
+                attempt,
+                state=AttemptState.COMPLETED,
+                external_execution_id=attempt.authority_attempt_id,
+                finished_at=completed_at,
+                last_error=None,
+                session_slot_claimed=False,
+                uncertainty_kind=None,
+                updated_at=completed_at,
+                revision=attempt.revision + 1,
+            )
+            updated_assignment = replace(
+                assignment,
+                state=AssignmentState.REVIEW_REQUIRED,
+                updated_at=completed_at,
+                revision=assignment.revision + 1,
+            )
+            updated_session = replace(
+                session,
+                active_assignments=remaining,
+                state=(
+                    ProviderSessionState.BUSY
+                    if remaining >= session.concurrency_limit
+                    else ProviderSessionState.READY
+                ),
+                last_seen_at=completed_at,
+                updated_at=completed_at,
+                revision=session.revision + 1,
+            )
+            self._replace(connection, updated_attempt, attempt.revision)
+            self._replace(connection, updated_assignment, assignment.revision)
+            self._replace(connection, updated_session, session.revision)
+            for reservation in workspaces:
+                self._replace(
+                    connection,
+                    replace(
+                        reservation,
+                        state=ReservationState.ACTIVE,
+                        updated_at=completed_at,
+                        revision=reservation.revision + 1,
+                    ),
+                    reservation.revision,
+                )
+            for write in writes:
+                self._replace(
+                    connection,
+                    replace(
+                        write,
+                        state=ReservationState.ACTIVE,
+                        updated_at=completed_at,
+                        revision=write.revision + 1,
+                    ),
+                    write.revision,
+                )
+            cursor = connection.execute(
+                "UPDATE pass_b_launch_claims "
+                "SET state='COMPLETED',updated_at=? "
+                "WHERE attempt_id=? AND assignment_id=? "
+                "AND authority_attempt_id=? AND state='UNCERTAIN'",
+                (
+                    completed_at,
+                    attempt.attempt_id,
+                    assignment.assignment_id,
+                    attempt.authority_attempt_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise PermissionError(
+                    "uncertain execution launch claim changed concurrently"
+                )
+            connection.execute(
+                "UPDATE pass_b_workspace_claims SET state='ACTIVE' "
+                "WHERE assignment_id=? AND state='UNCERTAIN'",
+                (assignment.assignment_id,),
+            )
+            connection.execute(
+                "UPDATE pass_b_write_claims SET state='ACTIVE' "
+                "WHERE assignment_id=? AND state='UNCERTAIN'",
+                (assignment.assignment_id,),
+            )
+            self._consume_usage(
+                connection, assignment.assignment_id, completed_at
+            )
+        return updated_attempt
+
     def recover_interrupted_attempts(self, recovered_at: str) -> dict[str, int]:
         result = {"prelaunch_released": 0, "uncertain": 0}
         with self.store.connect() as connection:

@@ -170,7 +170,9 @@ class PassBApplication:
                     "production Authority requires the production Executive"
                 )
             launch_authority = ExecutiveAuthorityLaunchGate.production(
-                self.executive, authority_client
+                self.executive,
+                authority_client,
+                authority_exchange_root,
             )
         else:
             launch_authority = None
@@ -292,6 +294,11 @@ class PassBApplication:
             recovery_action_authority=recovery_action_authority,
             uncertain_execution_observer=uncertain_execution_observer,
             uncertain_execution_finalizer=uncertain_execution_finalizer,
+            completed_execution_reconciler=(
+                launch_authority.reconcile_completed_execution
+                if isinstance(launch_authority, ExecutiveAuthorityLaunchGate)
+                else None
+            ),
         )
         self.conversation = DurableConversationService(
             self.repository, self.executive
@@ -560,6 +567,16 @@ class PassBApplication:
             "observation_digest": observation_digest,
         }
 
+    def reconcile_completed_uncertain_execution(
+        self, assignment_id: str
+    ) -> dict[str, Any] | None:
+        evidence = (
+            self.orchestration.reconcile_completed_uncertain_execution(
+                assignment_id
+            )
+        )
+        return evidence.to_dict() if evidence is not None else None
+
     def apply_uncertain_execution_disposition_approval(
         self,
         assignment_id: str,
@@ -574,8 +591,16 @@ class PassBApplication:
         )
         return attempt.to_dict()
 
-    def begin_conversation(self, message: str) -> Any:
-        outcome = self.conversation.begin(message)
+    def begin_conversation(
+        self,
+        message: str,
+        *,
+        founder_revisions: dict[str, Any] | None = None,
+    ) -> Any:
+        outcome = self.conversation.begin(
+            message,
+            founder_revisions=founder_revisions,
+        )
         self.select_project(outcome.project.project_id)
         return outcome
 
@@ -583,6 +608,13 @@ class PassBApplication:
         outcome = self.conversation.continue_project(project_id, message)
         self.select_project(project_id)
         return outcome
+
+    def casual_conversation(
+        self,
+        project_id: str | None,
+        message: str,
+    ) -> Any:
+        return self.conversation.converse(project_id, message)
 
     def advance_delegated_completion(
         self, project_id: str

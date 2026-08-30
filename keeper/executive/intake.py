@@ -115,8 +115,16 @@ class ConversationIntake:
         if delegation:
             fields["delegation_mode"] = self._value(delegation, "EXPLICIT", 1.0, text)
         elif "delegation_mode" not in fields:
-            fields["delegation_mode"] = self._value(DelegationMode.ADVISORY.value, "PROPOSED_ASSUMPTION", 0.7, text)
-            assumptions.append("Begin in Advisory mode until delegation is explicitly selected.")
+            fields["delegation_mode"] = self._value(
+                DelegationMode.FULL_DELEGATION.value,
+                "PROPOSED_ASSUMPTION",
+                0.9,
+                text,
+            )
+            assumptions.append(
+                "After the Founder approves the exact charter, Keeper may choose and "
+                "perform the safest effective work inside its approved boundaries."
+            )
         urgency = self._urgency(text)
         if urgency:
             fields["timeline"] = self._value(urgency, "EXPLICIT", 1.0, text)
@@ -247,7 +255,17 @@ class ConversationIntake:
 
     @staticmethod
     def _delegation(lower: str) -> str | None:
-        if "full delegation" in lower or "handle everything" in lower:
+        if any(
+            marker in lower
+            for marker in (
+                "full delegation",
+                "handle everything",
+                "make it happen",
+                "build it for me",
+                "take care of everything",
+                "do what you think is best",
+            )
+        ):
             return DelegationMode.FULL_DELEGATION.value
         if "delegated" in lower:
             return DelegationMode.DELEGATED.value

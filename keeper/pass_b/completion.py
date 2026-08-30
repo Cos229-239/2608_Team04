@@ -542,6 +542,17 @@ class CompletionCoordinator:
             raise PermissionError(
                 "approved providers do not share one explicit privacy policy"
             )
+        routing = self.repository.store.get("settings", "routing") or {}
+        preferred = routing.get("conversation_provider_id")
+        preferred_provider_id = (
+            str(preferred)
+            if (
+                role != AssignmentRole.REVIEWER
+                and isinstance(preferred, str)
+                and preferred in charter.approved_providers
+            )
+            else None
+        )
         return self.orchestration.register_execution_profile(
             work_item_id=work_item.work_item_id,
             role=role,
@@ -552,7 +563,7 @@ class CompletionCoordinator:
             effort_level="MEDIUM",
             required_capabilities=(str(role).casefold(),),
             privacy_classification=next(iter(privacy_values)),
-            preferred_provider_id=None,
+            preferred_provider_id=preferred_provider_id,
             allow_substitution=True,
             review_of_assignment_id=review_of_assignment_id,
         )

@@ -14,8 +14,16 @@ from keeper.pass_b.conversation import (
 class DurableConversationService(ConversationService):
     """Conversation flow that retains the exact Executive charter proposal."""
 
-    def begin(self, message: str) -> ConversationOutcome:
-        outcome = super().begin(message)
+    def begin(
+        self,
+        message: str,
+        *,
+        founder_revisions: dict[str, Any] | None = None,
+    ) -> ConversationOutcome:
+        outcome = super().begin(
+            message,
+            founder_revisions=founder_revisions,
+        )
         self._bind_charter(outcome.project.project_id, outcome.charter)
         return outcome
 
