@@ -320,6 +320,115 @@ class ClaudeCommandAdapter(CliProvider):
             )
             return ProcessResult(65, request.stdout_path, request.stderr_path, result.process_id)
 
+class GeminiCommandAdapter(CliProvider):
+    """Gemini CLI adapter using non-interactive JSON output."""
+
+    def __init__(self, executable: str, registration: dict[str, Any]) -> None:
+        resolved = str(Path(executable).resolve(strict=True))
+
+        super().__init__(
+            (resolved, "{prompt}"),
+            provider_name="gemini-command",
+            **_cli_registration_arguments(registration),
+        )
+
+        self.executable = resolved
+        self.executable_sha256 = str(registration["executable_sha256"])
+        self.registration = dict(registration)
+        self.instance_id = uuid.uuid4().hex
+        self.validate()
+
+    def build_command(self, request: AgentRequest) -> list[str]:
+        prompt = request.prompt_path.read_text(encoding="utf-8")
+        schema = json.dumps(
+            _domain_schema(request.role),
+            separators=(",", ":"),
+        )
+
+        structured_prompt = (
+            f"{prompt}\n\n"
+            "Return ONLY a valid JSON object matching the following JSON schema. "
+            "Do not use Markdown code fences.\n"
+            f"{schema}"
+        )
+
+        return [
+            self.executable,
+            "--output-format",
+            "json",
+            "-p",
+            structured_prompt,
+        ]
+
+    def run(self, request: AgentRequest) -> ProcessResult:
+        raw_path = request.stdout_path.with_suffix(".envelope.json")
+
+        raw_request = AgentRequest(
+            request.role,
+            request.prompt_path,
+            request.workspace,
+            request.timeout_seconds,
+            raw_path,
+            request.stderr_path,
+            request.reasoning_level,
+            request.on_process_started,
+            request.on_process_owned,
+            request.authority_attempt_id,
+        )
+
+        result = super().run(raw_request)
+
+        if result.exit_code:
+            return ProcessResult(
+                result.exit_code,
+                request.stdout_path,
+                request.stderr_path,
+                result.process_id,
+                result.timed_out,
+            )
+
+        try:
+            envelope = json.loads(raw_path.read_text(encoding="utf-8"))
+
+            if not isinstance(envelope, dict):
+                raise ValueError("Gemini result is not a JSON object")
+
+            response = envelope.get("response")
+
+            if not isinstance(response, str):
+                raise ValueError("Gemini envelope contains no response")
+
+            domain = json.loads(response)
+
+            if not isinstance(domain, dict):
+                raise ValueError("Gemini response is not a structured object")
+
+            request.stdout_path.write_text(
+                json.dumps(domain),
+                encoding="utf-8",
+            )
+
+            return ProcessResult(
+                0,
+                request.stdout_path,
+                request.stderr_path,
+                result.process_id,
+                output=domain,
+            )
+
+        except (json.JSONDecodeError, OSError, ValueError) as error:
+            request.stdout_path.write_text("", encoding="utf-8")
+            request.stderr_path.write_text(
+                f"invalid Gemini result envelope: {error}",
+                encoding="utf-8",
+            )
+
+            return ProcessResult(
+                65,
+                request.stdout_path,
+                request.stderr_path,
+                result.process_id,
+            )
 
 class ProviderDiscovery:
     def __init__(

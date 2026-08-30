@@ -9,6 +9,7 @@ from tests.keeper.authority_testkit import provider_authority_kwargs
 from keeper.providers.adapters import (
     ClaudeCommandAdapter,
     CodexCommandAdapter,
+    GeminiCommandAdapter,
     ProviderCapabilities,
     ProviderDiagnostic,
     ProviderDiscovery,
@@ -58,6 +59,29 @@ def test_claude_adapter_uses_argument_array_and_schema(tmp_path: Path) -> None:
     assert command[0] == str(executable.resolve())
     assert "--json-schema" in command
     assert command[-2:] == ["-p", "safe prompt"]
+
+def test_gemini_adapter_uses_json_output_and_structured_prompt(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "provider-gemini.exe"
+    executable.write_bytes(b"controlled provider")
+
+    registration = create_provider_registration(
+        "gemini",
+        executable,
+        authorized_by="test",
+        **provider_authority_kwargs("gemini"),
+    )
+
+    command = GeminiCommandAdapter(
+        str(executable),
+        registration,
+    ).build_command(_request(tmp_path))
+
+    assert command[0] == str(executable.resolve())
+    assert command[1:4] == ["--output-format", "json", "-p"]
+    assert "safe prompt" in command[4]
+    assert "Return ONLY a valid JSON object" in command[4]
 
 def test_discovery_includes_gemini_provider() -> None:
     providers = ProviderDiscovery(
