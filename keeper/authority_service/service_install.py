@@ -2170,6 +2170,23 @@ def _sid_directory(sid: str) -> str:
 
 
 def _git_head(root: Path) -> str:
+    release_identity = root / "keeper-release-source.json"
+    if release_identity.is_file():
+        try:
+            value = json.loads(release_identity.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise PermissionError("Keeper release source identity is invalid") from error
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schema_version", "source_commit", "source_tree"}
+            or value.get("schema_version") != 1
+            or not isinstance(value.get("source_commit"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}", str(value["source_commit"]))
+            or not isinstance(value.get("source_tree"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}", str(value["source_tree"]))
+        ):
+            raise PermissionError("Keeper release source identity is invalid")
+        return str(value["source_commit"])
     result = _run(
         [
             "git",

@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 pytest.importorskip("PySide6")
+from PySide6.QtCore import QCoreApplication
 
 from keeper.app.service import KeeperApplication
 from keeper.pass_b.application import PassBApplication
+from keeper.pass_b.enums import AssignmentState, AttemptState
+from keeper.pass_b.models import AssignmentRecord, AttemptRecord
 from keeper.ui_qml.composition import ProductSetupController
 from keeper.ui_qml.controller import (
     KeeperDesktopController,
     NAVIGATION,
+    _completion_feedback,
+    _primitive,
     _safe_error_message,
 )
 
@@ -47,6 +55,7 @@ def test_navigation_is_canonical_and_test_composition_is_visible(
 ) -> None:
     assert NAVIGATION == (
         "Overview",
+        "Keeper",
         "Projects",
         "Repositories",
         "Workflows",
@@ -79,6 +88,28 @@ def test_qml_projection_is_primitive_and_redacts_evidence_path(
     assert _is_primitive(snapshot)
 
 
+def test_qml_projection_stringifies_only_integers_outside_signed_64_bit() -> None:
+    maximum = 2**63 - 1
+    minimum = -(2**63)
+    projected = _primitive(
+        {
+            "maximum": maximum,
+            "minimum": minimum,
+            "unsigned_file_id": 10687299546425997470,
+            "negative_overflow": minimum - 1,
+            "flag": True,
+        }
+    )
+
+    assert projected == {
+        "maximum": maximum,
+        "minimum": minimum,
+        "unsigned_file_id": "10687299546425997470",
+        "negative_overflow": str(minimum - 1),
+        "flag": True,
+    }
+
+
 def test_assistant_creates_durable_conversation_not_fake_chat(
     controller: KeeperDesktopController,
 ) -> None:
@@ -93,6 +124,424 @@ def test_assistant_creates_durable_conversation_not_fake_chat(
         for item in snapshot["timeline"]
     )
     assert snapshot["project"]["approvalRequired"] is True
+
+
+def test_greeting_replies_without_creating_a_project(
+    controller: KeeperDesktopController,
+) -> None:
+    controller.startNewProject()
+    controller.sendAssistantMessage("Hello Keeper, are you ready?")
+
+    snapshot = controller.state_snapshot()
+    assert snapshot["project"]["id"] is None
+    assert len(controller.pass_b.project_catalog()) == 0
+    assert [item["body"] for item in snapshot["timeline"]] == [
+        "Hello Keeper, are you ready?",
+        (
+            "Yes, I'm ready. Tell me what you want to build or change, and "
+            "I'll help shape it into a project before anything runs."
+        ),
+    ]
+    assert controller._get_status() == "Keeper replied"
+
+    controller.sendAssistantMessage("Build a small local notes application.")
+
+    assert len(controller.pass_b.project_catalog()) == 1
+    assert controller.state_snapshot()["project"]["approvalRequired"] is True
+
+
+def test_greeting_with_build_request_still_creates_a_project(
+    controller: KeeperDesktopController,
+) -> None:
+    controller.startNewProject()
+    controller.sendAssistantMessage(
+        "Hello Keeper, build a local notes application with tests."
+    )
+
+    snapshot = controller.state_snapshot()
+    assert snapshot["project"]["approvalRequired"] is True
+    assert len(controller.pass_b.project_catalog()) == 1
+
+
+def test_production_chat_send_returns_before_durable_refresh_finishes(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_refresh = threading.Event()
+    refresh_started = threading.Event()
+    refresh_finished = threading.Event()
+    original_build_state = controller._build_state
+
+    def delayed_build_state() -> dict[str, object]:
+        refresh_started.set()
+        release_refresh.wait(timeout=2)
+        state = original_build_state()
+        refresh_finished.set()
+        return state
+
+    controller._test_fixture = False
+    monkeypatch.setattr(controller, "_build_state", delayed_build_state)
+
+    started = time.perf_counter()
+    controller.sendAssistantMessage("Hello Keeper, are you ready?")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.1
+    assert controller._get_busy() is True
+    assert refresh_started.wait(timeout=1)
+    release_refresh.set()
+    assert refresh_finished.wait(timeout=2)
+    application = QCoreApplication.instance() or QCoreApplication([])
+    deadline = time.monotonic() + 2
+    while controller._get_busy() and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+    assert controller._get_busy() is False
+    assert controller._get_status() == "Keeper replied"
+
+
+def test_primary_agent_selection_is_ready_only_and_durable(
+    controller: KeeperDesktopController,
+) -> None:
+    controller._state["settings"]["conversationProviders"] = [
+        {"provider_id": "codex", "name": "codex", "health": "READY"},
+        {"provider_id": "claude", "name": "claude", "health": "READY"},
+    ]
+
+    controller.selectConversationProvider("claude")
+
+    routing = controller.application.store.get("settings", "routing")
+    assert routing is not None
+    assert routing["conversation_provider_id"] == "claude"
+    assert controller._get_status() == "claude selected as the primary agent"
+
+    controller.selectConversationProvider("unqualified-provider")
+
+    assert controller._get_status() == "Action could not be completed"
+    assert "qualified READY session" in controller._get_error()
+    assert controller.application.store.get("settings", "routing") == routing
+
+
+def test_new_project_binds_selected_agent_and_ready_reviewers(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller._state["settings"].update(
+        {
+            "conversationProvider": "codex",
+            "conversationProviders": [
+                {"provider_id": "codex", "name": "codex", "health": "READY"},
+                {"provider_id": "claude", "name": "claude", "health": "READY"},
+            ],
+        }
+    )
+    captured: list[tuple[str, dict[str, object] | None]] = []
+    original = controller.pass_b.begin_conversation
+
+    def record_begin(
+        message: str,
+        *,
+        founder_revisions: dict[str, object] | None = None,
+    ) -> object:
+        captured.append((message, founder_revisions))
+        return original(message, founder_revisions=founder_revisions)
+
+    monkeypatch.setattr(controller.pass_b, "begin_conversation", record_begin)
+
+    controller.startNewProject()
+    controller.sendAssistantMessage("Build a small local notes application.")
+
+    assert captured == [
+        (
+            "Build a small local notes application.",
+            {"approved_providers": ("codex", "claude")},
+        )
+    ]
+    assert controller.state_snapshot()["project"]["approvalCharter"][
+        "approved_providers"
+    ] == ["codex", "claude"]
+
+
+def test_new_project_action_does_not_continue_selected_project(
+    controller: KeeperDesktopController,
+) -> None:
+    controller.sendAssistantMessage(
+        "Create a local report generator with tests and no network access."
+    )
+    first_project_id = controller.state_snapshot()["project"]["id"]
+
+    controller.startNewProject()
+    controller.sendAssistantMessage(
+        "Fix one QML lint warning without changing layout or behavior."
+    )
+
+    snapshot = controller.state_snapshot()
+    assert snapshot["project"]["id"] != first_project_id
+    assert len(controller.pass_b.project_catalog()) == 2
+    assert any(
+        "qml lint warning" in str(item["body"]).lower()
+        for item in snapshot["timeline"]
+    )
+
+
+def test_prepare_delegated_mode_creates_only_a_charter_revision(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller.sendAssistantMessage(
+        "Create a local report generator with tests and no network access."
+    )
+    project_id = controller.state_snapshot()["project"]["id"]
+    revisions: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(
+        controller.pass_b.conversation,
+        "revise",
+        lambda selected, replacements: revisions.append(
+            (selected, replacements)
+        ),
+    )
+
+    controller.prepareDelegatedMode()
+
+    assert revisions == [(project_id, {"delegation_mode": "DELEGATED"})]
+    assert controller._get_status() == (
+        "Delegated-mode revision is ready for Founder approval"
+    )
+
+
+def test_simple_task_uses_safe_defaults(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        controller.application,
+        "create_task",
+        lambda values: captured.append(values) or values,
+    )
+
+    controller.createSimpleTask(" Clean up Workflow UI ", " Keep behavior intact. ")
+
+    assert captured[0]["title"] == "Clean up Workflow UI"
+    assert captured[0]["objective"] == "Keep behavior intact."
+    assert captured[0]["baseline"] == "HEAD"
+    assert str(captured[0]["target_branch"]).startswith(
+        "keeper/clean-up-workflow-ui-"
+    )
+    assert captured[0]["prohibited_actions"] == [
+        "PUSH",
+        "DEPLOY",
+        "SPEND",
+        "LIVE_TRADING",
+    ]
+
+
+def test_task_creation_uses_the_selected_projects_exact_repository(
+    controller: KeeperDesktopController,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "approved-repository"
+    repository.mkdir()
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        controller.pass_b, "selected_project_id", lambda: "project-1"
+    )
+    monkeypatch.setattr(
+        controller,
+        "_selected_project_repository",
+        lambda project_id: repository.resolve(),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_selected_project_charter_identity",
+        lambda project_id: {
+            "charter_id": "charter-1",
+            "revision": 3,
+            "founder_approval_record_id": "approval-1",
+            "founder_approval_identity": "Founder",
+        },
+    )
+    monkeypatch.setattr(
+        controller.application,
+        "create_task",
+        lambda values: captured.append(values) or values,
+    )
+
+    controller.createTask("Bound", "Use the approved repository", "HEAD", "keeper/bound")
+
+    assert captured[0]["keeper_project_id"] == "project-1"
+    assert captured[0]["repository"] == str(repository.resolve())
+    assert captured[0]["keeper_charter_id"] == "charter-1"
+    assert captured[0]["keeper_charter_revision"] == 3
+
+
+def test_task_start_rejects_a_different_project_workspace_binding(
+    controller: KeeperDesktopController,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "approved-repository"
+    other = tmp_path / "other-repository"
+    repository.mkdir()
+    other.mkdir()
+    controller.application.store.upsert(
+        "tasks",
+        "task-mismatch",
+        {
+            "id": "task-mismatch",
+            "keeper_project_id": "project-other",
+            "repository": str(other.resolve()),
+            "status": "INTAKE",
+        },
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        controller.pass_b, "selected_project_id", lambda: "project-1"
+    )
+    monkeypatch.setattr(
+        controller,
+        "_selected_project_repository",
+        lambda project_id: repository.resolve(),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_selected_project_charter_identity",
+        lambda project_id: {
+            "charter_id": "charter-current",
+            "revision": 4,
+            "founder_approval_record_id": "approval-current",
+            "founder_approval_identity": "Founder",
+        },
+    )
+    monkeypatch.setattr(
+        controller.application,
+        "start_task",
+        lambda task_id: calls.append(task_id),
+    )
+
+    controller.startTask("task-mismatch")
+
+    assert calls == []
+    assert "not bound" in controller._get_error()
+
+
+def test_task_start_rejects_a_superseded_charter_binding(
+    controller: KeeperDesktopController,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "approved-repository"
+    repository.mkdir()
+    controller.application.store.upsert(
+        "tasks",
+        "task-stale-charter",
+        {
+            "id": "task-stale-charter",
+            "keeper_project_id": "project-1",
+            "keeper_charter_id": "charter-old",
+            "keeper_charter_revision": 3,
+            "keeper_founder_approval_record_id": "approval-old",
+            "keeper_founder_approval_identity": "Founder",
+            "repository": str(repository.resolve()),
+            "status": "INTAKE",
+        },
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        controller.pass_b, "selected_project_id", lambda: "project-1"
+    )
+    monkeypatch.setattr(
+        controller,
+        "_selected_project_repository",
+        lambda project_id: repository.resolve(),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_selected_project_charter_identity",
+        lambda project_id: {
+            "charter_id": "charter-current",
+            "revision": 4,
+            "founder_approval_record_id": "approval-current",
+            "founder_approval_identity": "Founder",
+        },
+    )
+    monkeypatch.setattr(
+        controller.application,
+        "start_task",
+        lambda task_id: calls.append(task_id),
+    )
+
+    controller.startTask("task-stale-charter")
+
+    assert calls == []
+    assert "current approved Keeper charter" in controller._get_error()
+
+
+def test_completion_feedback_explains_next_required_action() -> None:
+    completed = [SimpleNamespace(state="COMPLETED", detail="Done")]
+    blocked = [
+        SimpleNamespace(
+            state="BLOCKED",
+            detail="Independent reviewer is unavailable.",
+        )
+    ]
+
+    assert _completion_feedback(completed) == (
+        "Approved work is complete",
+        "",
+        True,
+    )
+    assert _completion_feedback(blocked) == (
+        "Keeper reached the approved charter boundary",
+        "Independent reviewer is unavailable.",
+        False,
+    )
+
+
+def test_delegated_charter_approval_starts_work_automatically(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller._state = {
+        "project": {
+            "approvalCharter": {
+                "charter_id": "charter-1",
+                "revision": 2,
+            }
+        }
+    }
+    calls: list[str] = []
+    monkeypatch.setattr(
+        controller.pass_b,
+        "selected_project_id",
+        lambda: "project-1",
+    )
+    monkeypatch.setattr(
+        controller.pass_b,
+        "approve_and_plan_current_charter",
+        lambda *args, **kwargs: {
+            "charter": {"delegation_mode": "DELEGATED"}
+        },
+    )
+    monkeypatch.setattr(
+        controller.pass_b,
+        "run_delegated_completion",
+        lambda project_id: calls.append(project_id)
+        or [SimpleNamespace(state="COMPLETED", detail="Done")],
+    )
+    monkeypatch.setattr(controller, "_refresh_state_only", lambda: None)
+
+    controller.approveCurrentCharter()
+    deadline = time.monotonic() + 2
+    while controller._get_busy() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert calls == ["project-1"]
+    assert controller._get_status() == (
+        "Charter approved. Approved work is complete"
+    )
+    assert controller._get_error() == ""
 
 
 def test_unknown_navigation_and_run_actions_fail_closed(
@@ -150,11 +599,89 @@ def test_qml_search_and_narrow_assistant_are_real_and_source_backed() -> None:
     assert "onTextChanged: window.searchQuery = text" in qml
     assert "model: filtered(keeper.state.evidenceReferences || [])" in qml
     assert "readonly property bool opened: userOpened" in qml
-    assert "assistantDrawer.userOpened = true" in qml
+    assert 'keeper.navigate("Keeper")' in qml
     assert "keeper.startTask(modelData.id)" in qml
     assert "keeper.runAction(modelData.run_id, \"resume\")" in qml
     assert "keeper.exportRunReport(window.selectedRunId, selectedFile)" in qml
     assert "Math.min(460, Math.max(120, emptyRoot.width - 24))" in qml
+    assert 'objectName: "delegatedModeDialog"' in qml
+    assert 'objectName: "prepareDelegatedMode"' in qml
+    assert "window.workflowActionText()" in qml
+    assert "window.handleWorkflowAction()" in qml
+    assert "window.workflowStatusText()" in qml
+    assert "keeper.createSimpleTask(taskTitle.text, taskObjective.text)" in qml
+    assert 'actionText: "+ Talk to Keeper"' in qml
+    assert 'actionText: "Advanced: Add Task"' in qml
+    assert "without asking you to manage tasks or workflows" in qml
+    assert 'objectName: "keeperChatList"' in qml
+    assert 'objectName: "conversationProviderSelector"' in qml
+    assert "keeper.selectConversationProvider(currentValue)" in qml
+    assert 'property bool followingNewest: true' in qml
+    assert "ScrollBar.vertical: ScrollBar" in qml
+    assert "if (moving && !atYEnd)" in qml
+    assert 'text: "Jump to newest"' in qml
+
+
+def test_recovery_projects_pass_b_uncertainty_and_founder_disposition(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    product_snapshot = controller.pass_b.product_snapshot()
+    monkeypatch.setattr(
+        controller.pass_b, "product_snapshot", lambda: product_snapshot
+    )
+    original_list = controller.pass_b.repository.list
+    uncertain_assignment = SimpleNamespace(
+        assignment_id="uncertain-assignment-1",
+        project_id="project-1",
+        workflow_id="workflow-1",
+        work_item_id="work-item-1",
+        provider_id="codex",
+        state=AssignmentState.UNCERTAIN,
+    )
+    uncertain_attempt = SimpleNamespace(
+        assignment_id="uncertain-assignment-1",
+        attempt_id="uncertain-attempt-1",
+        state=AttemptState.UNCERTAIN,
+        uncertainty_kind="EXTERNAL_EXECUTION_OUTCOME_AMBIGUOUS",
+    )
+
+    def repository_list(record_type: type[object], **filters: object) -> list[object]:
+        if record_type is AssignmentRecord:
+            return [uncertain_assignment]
+        if record_type is AttemptRecord:
+            return [uncertain_attempt]
+        return original_list(record_type, **filters)
+
+    monkeypatch.setattr(controller.pass_b.repository, "list", repository_list)
+
+    controller.refresh()
+
+    state = controller.state_snapshot()
+    assert state["counts"]["uncertain"] == 1
+    assert len(state["recoveries"]) == 1
+    recovery = state["recoveries"][0]
+    assert recovery == {
+        "id": "uncertain-assignment-1",
+        "assignment_id": "uncertain-assignment-1",
+        "attempt_id": "uncertain-attempt-1",
+        "project_id": "project-1",
+        "workflow_id": "workflow-1",
+        "work_item_id": "work-item-1",
+        "provider_id": "codex",
+        "source": "pass_b_uncertain_execution",
+        "status": "UNCERTAIN",
+        "reason": (
+            "External execution outcome remains possible. "
+            "Founder disposition is required; no result or retry "
+            "will be accepted."
+        ),
+    }
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+    assert 'text: "Resolve safely"' in qml
+    assert "keeper.resolveUncertainExecution(modelData.assignment_id)" in qml
 
 
 def test_rendered_smoke_contract_covers_all_pages_at_wide_and_minimum() -> None:
@@ -244,6 +771,16 @@ def test_repaired_controls_call_exact_supported_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[object, ...]] = []
+    controller.application.store.upsert(
+        "tasks",
+        "task-1",
+        {
+            "id": "task-1",
+            "status": "INTAKE",
+            "repository": str(tmp_path),
+            "keeper_project_id": None,
+        },
+    )
     monkeypatch.setattr(
         controller.application,
         "start_task",
@@ -348,6 +885,28 @@ def test_qml_task_finding_project_controls_and_responsive_assistant() -> None:
     assert "if (width >= 1360 && narrowAssistantDialog.visible)" in qml
     assert "window.width < 1300 ? 210 : 248" in qml
     assert "Layout.preferredHeight: 380" in qml
+
+
+def test_qml_reports_filter_exportable_and_pending_runs() -> None:
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+    assert 'property string reportAvailabilityFilter: "ALL"' in qml
+    assert "function reportRows()" in qml
+    assert 'model: ["ALL", "EXPORTABLE", "PENDING"]' in qml
+    assert "model: reportRows()" in qml
+
+
+def test_qml_filters_provider_health_and_recovery_action_state() -> None:
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+    assert 'model: ["ALL", "READY", "NOT READY"]' in qml
+    assert "function providerRows()" in qml
+    assert "model: providerRows()" in qml
+    assert 'model: ["ALL", "UNCERTAIN", "RESUMABLE"]' in qml
+    assert "function recoveryRows()" in qml
+    assert "model: recoveryRows()" in qml
     for state in (
         "BACKLOG",
         "READY",

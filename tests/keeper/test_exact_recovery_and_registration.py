@@ -367,6 +367,8 @@ def test_protected_evidence_path_must_be_canonical(tmp_path: Path) -> None:
 
 def _qualified_registration(
     tmp_path: Path,
+    provider_id: str = "codex",
+    version_output: str = "controlled-provider 1.2.3",
 ) -> tuple[
     Path,
     dict[str, Any],
@@ -376,16 +378,16 @@ def _qualified_registration(
     executable = tmp_path / "provider.exe"
     executable.write_bytes(b"registered provider")
     registration = create_provider_registration(
-        "codex",
+        provider_id,
         executable,
         authorized_by="test-authority",
-     **provider_authority_kwargs('codex'))
+     **provider_authority_kwargs(provider_id))
     evidence: dict[str, Any] = {
         "id": "qualification:test",
         "kind": "provider_qualification",
         "registration_id": registration["trusted_registration_id"],
         "registration_version": registration["registration_version"],
-        "provider_id": "codex",
+        "provider_id": provider_id,
         "provider_instance_id": "qualification-instance",
         "provider_run_id": "qualification-run",
         "executable_sha256": registration["executable_sha256"],
@@ -398,8 +400,8 @@ def _qualified_registration(
         "started_at": "2026-07-26T00:00:00+00:00",
         "finished_at": "2026-07-26T00:00:01+00:00",
         "exit_status": 0,
-        "raw_version_output": "controlled-provider 1.2.3",
-        "normalized_version": "controlled-provider 1.2.3",
+        "raw_version_output": version_output,
+        "normalized_version": version_output,
         "qualification_method": "protected-registered-launch",
         "qualification_result": "qualified",
         "authorized_by": "test-authority",
@@ -414,7 +416,7 @@ def _qualified_registration(
             "kind": "provider_qualification_started",
             "schema_version": 1,
             "registration_id": registration["trusted_registration_id"],
-            "provider_id": "codex",
+            "provider_id": provider_id,
             "authorization_reference": "test-authority",
             "event_challenge": "qualification",
             "started_at": "2026-07-26T00:00:00+00:00",
@@ -437,6 +439,17 @@ def _qualified_registration(
         {str(evidence["id"]): evidence, str(start["id"]): start},
         authority,
     )
+
+
+def test_qwen_protected_qualification_accepts_real_ollama_output(
+    tmp_path: Path,
+) -> None:
+    _, registration, _, _ = _qualified_registration(
+        tmp_path, "qwen", "ollama version is 0.32.9"
+    )
+
+    assert registration["registration_lifecycle"] == "QUALIFIED"
+    assert registration["qualified_version"] == "ollama version is 0.32.9"
 
 
 @pytest.mark.parametrize(

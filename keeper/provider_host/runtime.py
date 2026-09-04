@@ -687,6 +687,18 @@ class KeeperProviderHost:
             "launch_journal": journal,
         }
 
+    def recovery_barrier(self) -> dict[str, object]:
+        """Prove no timed-out launch worker can still cross persistence."""
+
+        with self._lock:
+            self._require_ready()
+            require_same_binding(self.identity.binding, self._observed_binding())
+            if self._active_cancel is not None or self._active_identity is not None:
+                raise PermissionError("Provider Host recovery barrier found active work")
+            result = self.status()
+            result["launch_journal"] = self._store.recovery_barrier_summary()
+            return result
+
     def reconcile_uncertain_launch(
         self, signed_reconciliation: Mapping[str, Any]
     ) -> dict[str, object]:

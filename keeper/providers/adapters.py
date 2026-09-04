@@ -320,18 +320,17 @@ class ClaudeCommandAdapter(CliProvider):
             )
             return ProcessResult(65, request.stdout_path, request.stderr_path, result.process_id)
 
+
 class GeminiCommandAdapter(CliProvider):
-    """Gemini CLI adapter using non-interactive JSON output."""
+    """Fail-closed Gemini CLI adapter for non-interactive structured output."""
 
     def __init__(self, executable: str, registration: dict[str, Any]) -> None:
         resolved = str(Path(executable).resolve(strict=True))
-
         super().__init__(
             (resolved, "{prompt}"),
             provider_name="gemini-command",
             **_cli_registration_arguments(registration),
         )
-
         self.executable = resolved
         self.executable_sha256 = str(registration["executable_sha256"])
         self.registration = dict(registration)
@@ -339,45 +338,37 @@ class GeminiCommandAdapter(CliProvider):
         self.validate()
 
     def build_command(self, request: AgentRequest) -> list[str]:
+        schema = json.dumps(_domain_schema(request.role), separators=(",", ":"))
         prompt = request.prompt_path.read_text(encoding="utf-8")
-        schema = json.dumps(
-            _domain_schema(request.role),
-            separators=(",", ":"),
+        governed_prompt = (
+            "Return only one JSON object that validates against this JSON Schema: "
+            f"{schema}\n\nTask:\n{prompt}"
         )
-
-        structured_prompt = (
-            f"{prompt}\n\n"
-            "Return ONLY a valid JSON object matching the following JSON schema. "
-            "Do not use Markdown code fences.\n"
-            f"{schema}"
-        )
-
         return [
             self.executable,
+            "--sandbox",
+            "--approval-mode=plan",
             "--output-format",
             "json",
-            "-p",
-            structured_prompt,
+            "--prompt",
+            governed_prompt,
         ]
 
     def run(self, request: AgentRequest) -> ProcessResult:
-        raw_path = request.stdout_path.with_suffix(".envelope.json")
-
+        envelope_path = request.stdout_path.with_suffix(".envelope.json")
         raw_request = AgentRequest(
             request.role,
             request.prompt_path,
             request.workspace,
             request.timeout_seconds,
-            raw_path,
+            envelope_path,
             request.stderr_path,
             request.reasoning_level,
             request.on_process_started,
             request.on_process_owned,
             request.authority_attempt_id,
         )
-
         result = super().run(raw_request)
-
         if result.exit_code:
             return ProcessResult(
                 result.exit_code,
@@ -386,49 +377,26 @@ class GeminiCommandAdapter(CliProvider):
                 result.process_id,
                 result.timed_out,
             )
-
         try:
-            envelope = json.loads(raw_path.read_text(encoding="utf-8"))
-
-            if not isinstance(envelope, dict):
-                raise ValueError("Gemini result is not a JSON object")
-
-            response = envelope.get("response")
-
-            if not isinstance(response, str):
+            envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+            if not isinstance(envelope, dict) or not isinstance(
+                envelope.get("response"), str
+            ):
                 raise ValueError("Gemini envelope contains no response")
-
-            domain = json.loads(response)
-
+            domain = json.loads(str(envelope["response"]))
             if not isinstance(domain, dict):
                 raise ValueError("Gemini response is not a structured object")
-
-            request.stdout_path.write_text(
-                json.dumps(domain),
-                encoding="utf-8",
-            )
-
+            request.stdout_path.write_text(json.dumps(domain), encoding="utf-8")
             return ProcessResult(
-                0,
-                request.stdout_path,
-                request.stderr_path,
-                result.process_id,
-                output=domain,
+                0, request.stdout_path, request.stderr_path, result.process_id, output=domain
             )
-
         except (json.JSONDecodeError, OSError, ValueError) as error:
             request.stdout_path.write_text("", encoding="utf-8")
             request.stderr_path.write_text(
-                f"invalid Gemini result envelope: {error}",
-                encoding="utf-8",
+                f"invalid Gemini result envelope: {error}", encoding="utf-8"
             )
+            return ProcessResult(65, request.stdout_path, request.stderr_path, result.process_id)
 
-            return ProcessResult(
-                65,
-                request.stdout_path,
-                request.stderr_path,
-                result.process_id,
-            )
 
 class ProviderDiscovery:
     def __init__(
@@ -458,12 +426,12 @@ class ProviderDiscovery:
                 "implemented; not verified on this machine",
             ),
             self._command(
-            "gemini",
-            "Gemini CLI command",
-            ("gemini", "gemini.cmd", "gemini.exe"),
-            "discovery implemented; execution adapter pending",
+                "gemini",
+                "Gemini CLI command",
+                ("gemini", "gemini.cmd", "gemini.exe"),
+                "structured execution implemented; Authority qualification required",
             ),
-            self._ollama(),
+            self._qwen(),
             ProviderDiagnostic(
                 "mock",
                 "Deterministic mock",
@@ -552,21 +520,51 @@ class ProviderDiscovery:
             else "",
         )
 
-    def _ollama(self) -> ProviderDiagnostic:
-        executable = self.configured_paths.get("ollama") or shutil.which("ollama")
-        return ProviderDiagnostic(
-            "ollama",
-            "Ollama local models",
-            bool(executable),
+    def _qwen(self) -> ProviderDiagnostic:
+        executable = (
+            self.configured_paths.get("qwen")
+            or self.configured_paths.get("ollama")
+            or shutil.which("ollama")
+        )
+        registration = self.registrations.get("qwen")
+        valid, detail = _validate_discovery_registration(
+            "qwen",
             executable,
-            None,
-            "adapter verified with deterministic client; local service not exercised"
-            if not executable
-            else "executable detected; health check required before use",
-            ProviderCapabilities(local_only=True, streaming=False),
-            "" if executable else "Ollama is optional and was not found.",
-            None,
-            "configured" if executable else "unavailable",
+            registration,
+            self.qualification_evidence,
+            self.authority_verifier,
+        )
+        return ProviderDiagnostic(
+            "qwen",
+            "Qwen local model",
+            valid,
+            executable,
+            str(registration.get("qualified_version")) if valid and registration else None,
+            "qualified" if valid else "blocked",
+            ProviderCapabilities(**dict(registration["capability_set"]))
+            if valid and registration
+            else ProviderCapabilities(
+                author=False,
+                reviewer=False,
+                repairer=False,
+                structured_output=False,
+                streaming=False,
+                cancellation=False,
+                usage_reporting=False,
+                local_only=True,
+            ),
+            detail if executable else "Qwen requires a local Ollama installation.",
+            dict(registration) if valid and registration else None,
+            "qualified" if valid else "blocked" if executable else "unavailable",
+            tuple(registration.get("role_eligibility", ()))
+            if valid and registration
+            else (),
+            str(registration.get("independence_classification", ""))
+            if valid and registration
+            else "",
+            str(registration.get("provider_policy", ""))
+            if valid and registration
+            else "",
         )
 
 
@@ -614,7 +612,7 @@ def route_provider(
         raise RuntimeError("no independent reviewer is available")
     if not candidates:
         raise RuntimeError(f"no provider can perform role: {request.role}")
-    strength = {"mock": 0, "ollama": 1, "claude": 2, "codex": 2}
+    strength = {"mock": 0, "qwen": 1, "gemini": 2, "claude": 2, "codex": 2}
     candidates.sort(key=lambda item: (-strength.get(item.provider_id, 0), item.provider_id))
     chosen = candidates[0]
     reasons = [
@@ -622,7 +620,7 @@ def route_provider(
         "provider identity has not participated in an incompatible prior role",
     ]
     if request.qwen_authored:
-        if chosen.provider_id == "ollama":
+        if chosen.provider_id == "qwen":
             raise RuntimeError("Qwen-authored work requires a non-Qwen independent reviewer")
         reasons.append("non-Qwen reviewer required for Qwen-authored work")
     if request.risk.lower() in {"high", "critical"}:
@@ -855,11 +853,28 @@ def create_provider_registration(
         launcher_size = len(launcher_content)
         if subscription_contract:
             normalized_executable_file_identity = _file_identity(configured.stat())
-    invocation = invocation_shape or (
-        [str(launcher), "/d", "/c", str(script), "{prompt}"]
+    invocation_base = (
+        [str(launcher), "/d", "/c", str(script)]
         if script is not None
-        else [str(launcher), "{prompt}"]
+        else [str(launcher)]
     )
+    invocation = invocation_shape
+    if invocation is None and provider_id == "gemini":
+        invocation = [
+            *invocation_base,
+            "--sandbox",
+            "--approval-mode=plan",
+            "--model",
+            "gemini-2.5-pro",
+            "--output-format",
+            "json",
+            "--prompt",
+            "{prompt}",
+        ]
+    elif invocation is None and provider_id == "qwen":
+        invocation = [*invocation_base, "run", "qwen3-coder:30b", "{prompt}"]
+    elif invocation is None:
+        invocation = [*invocation_base, "{prompt}"]
     if subscription_contract and role_eligibility is None:
         if provider_id == "codex":
             roles = ["builder", "repairer"]
@@ -941,6 +956,10 @@ def create_provider_registration(
             normalized_model_allowlist[0]
             if normalized_model_allowlist is not None
             and len(normalized_model_allowlist) == 1
+            else "gemini-2.5-pro"
+            if provider_id == "gemini"
+            else "qwen3-coder:30b"
+            if provider_id == "qwen"
             else provider_id
         ),
         "qualified_version": None,
@@ -1437,18 +1456,22 @@ def _qualification_is_consistent(
     ):
         return False
     try:
+        unqualified = {
+            **registration,
+            "qualified_version": None,
+            "qualification_timestamp": None,
+            "qualification_method": "none",
+            "qualification_result": "not-qualified",
+            "registration_lifecycle": "REGISTERED_UNQUALIFIED",
+            "qualification_evidence_id": None,
+            "qualification_evidence_digest": None,
+            "configuration_digest": "",
+        }
+        unqualified["configuration_digest"] = _registration_configuration_digest(
+            unqualified
+        )
         expected = apply_protected_qualification(
-            {
-                **registration,
-                "qualified_version": None,
-                "qualification_timestamp": None,
-                "qualification_method": "none",
-                "qualification_result": "not-qualified",
-                "registration_lifecycle": "REGISTERED_UNQUALIFIED",
-                "qualification_evidence_id": None,
-                "qualification_evidence_digest": None,
-                "configuration_digest": "",
-            },
+            unqualified,
             evidence,
             authority_verifier=authority_verifier,
             expected_challenge=str(evidence["event_challenge"]),
@@ -1492,6 +1515,11 @@ def _qualification_start_is_valid(
 
 
 def _version_output_valid(provider_id: str, value: str) -> bool:
+    if provider_id == "qwen" and re.fullmatch(
+        r"(?i)ollama\s+version\s+is\s+v?\d+\.\d+(?:\.\d+)?(?:[-+.\w ]*)",
+        value.strip(),
+    ):
+        return True
     if provider_id == "claude":
         try:
             validate_claude_version_output(value)
@@ -1502,6 +1530,8 @@ def _version_output_valid(provider_id: str, value: str) -> bool:
     allowed_names = {
         "codex": r"(?:codex|controlled-provider|protected-version)",
         "claude": r"(?:claude|controlled-provider|protected-version)",
+        "gemini": r"(?:gemini|controlled-provider|protected-version)",
+        "qwen": r"(?:ollama|qwen|controlled-provider|protected-version)",
     }
     name = allowed_names.get(provider_id)
     return bool(
@@ -2130,6 +2160,7 @@ def authority_provider_output_schema(
     role: str, *, provider_input_required: bool
 ) -> dict[str, Any]:
     """Return the one Authority-owned schema used at reserve and launch."""
+    role = normalize_authority_provider_role(role)
     schema = _domain_schema(role)
     if not provider_input_required or role != "reviewer":
         return schema
@@ -2142,6 +2173,25 @@ def authority_provider_output_schema(
     )
     required.append("review_input_declaration")
     return schema
+
+
+def normalize_authority_provider_role(role: str) -> str:
+    """Normalize Executive role aliases before schema construction."""
+    raw_role = role.casefold()
+    normalized = {
+        "author": "builder",
+        "implementer": "builder",
+        "executive_builder": "builder",
+        "executive_reviewer": "reviewer",
+        "executive_post_repair_reviewer": "post_repair_reviewer",
+    }.get(raw_role)
+    if normalized is not None:
+        return normalized
+    if "review" in raw_role:
+        return "reviewer"
+    if "repair" in raw_role:
+        return "repairer"
+    return "builder"
 
 
 def validate_value_against_schema(value: object, schema: object) -> bool:

@@ -19,6 +19,9 @@ CONFIRMATION_PURPOSE = b"keeper-founder-confirmation-v2\x00"
 EXECUTIVE_INPUT_RECEIPT_PURPOSE = (
     b"keeper-executive-delivered-input-commit-receipt-v1\x00"
 )
+EXECUTIVE_RECOVERY_RECEIPT_PURPOSE = (
+    b"keeper-executive-uncertain-execution-disposition-receipt-v1\x00"
+)
 APPLICATION_IDENTITY = "KEEPER_EXECUTIVE"
 _TEST_ISSUER_ID = "keeper-test-founder-issuer"
 _TEST_KEY = hashlib.sha256(
@@ -42,6 +45,21 @@ _EXECUTIVE_INPUT_RECEIPT_FIELDS = {
 }
 _SIGNED_EXECUTIVE_INPUT_RECEIPT_FIELDS = (
     _EXECUTIVE_INPUT_RECEIPT_FIELDS
+    | {"issuer_id", "issuer_key_id", "signature_algorithm", "signature"}
+)
+_EXECUTIVE_RECOVERY_RECEIPT_FIELDS = {
+    "schema_version", "kind", "receipt_id", "database_id",
+    "recovery_epoch", "repository_mode", "approval_id",
+    "approval_event_id", "founder_identity", "project_id", "charter_id",
+    "charter_revision", "execution_charter_id", "execution_charter_revision",
+    "action_id", "action_digest",
+    "authority_attempt_id", "pass_b_attempt_id", "assignment_id",
+    "observation_digest", "approved_inactivity_observation",
+    "approved_inactivity_observation_digest", "possible_external_effect", "retry_authorized",
+    "consumed_at", "issued_at",
+}
+_SIGNED_EXECUTIVE_RECOVERY_RECEIPT_FIELDS = (
+    _EXECUTIVE_RECOVERY_RECEIPT_FIELDS
     | {"issuer_id", "issuer_key_id", "signature_algorithm", "signature"}
 )
 
@@ -83,6 +101,7 @@ def _validate_executive_input_receipt_unsigned(
     receipt = dict(value)
     text_fields = _EXECUTIVE_INPUT_RECEIPT_FIELDS - {
         "schema_version", "recovery_epoch", "charter_revision",
+        "execution_charter_revision",
         "delivered_input_record_revision", "session_slot_claimed",
         "usage_reservation_id",
     }
@@ -170,6 +189,91 @@ def validate_executive_input_receipt(
             raise PermissionError(
                 "signed Executive delivered-input receipt is invalid"
             )
+    _unb64(str(value["signature"]))
+    return dict(value)
+
+
+def _validate_executive_recovery_receipt_unsigned(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    if set(value) != _EXECUTIVE_RECOVERY_RECEIPT_FIELDS:
+        raise PermissionError("Executive recovery receipt fields are invalid")
+    receipt = dict(value)
+    text_fields = _EXECUTIVE_RECOVERY_RECEIPT_FIELDS - {
+        "schema_version", "recovery_epoch", "charter_revision",
+        "execution_charter_revision",
+        "approved_inactivity_observation",
+        "possible_external_effect", "retry_authorized",
+    }
+    if (
+        receipt.get("schema_version") != 1
+        or receipt.get("kind")
+        != "executive_uncertain_execution_disposition_receipt"
+        or receipt.get("repository_mode") not in {"PRODUCTION", "TEST"}
+        or receipt.get("possible_external_effect") is not True
+        or receipt.get("retry_authorized") is not False
+        or isinstance(receipt.get("recovery_epoch"), bool)
+        or not isinstance(receipt.get("recovery_epoch"), int)
+        or int(receipt["recovery_epoch"]) < 0
+        or isinstance(receipt.get("charter_revision"), bool)
+        or not isinstance(receipt.get("charter_revision"), int)
+        or int(receipt["charter_revision"]) < 1
+        or isinstance(receipt.get("execution_charter_revision"), bool)
+        or not isinstance(receipt.get("execution_charter_revision"), int)
+        or int(receipt["execution_charter_revision"]) < 1
+        or int(receipt["charter_revision"])
+        < int(receipt["execution_charter_revision"])
+        or any(
+            not isinstance(receipt.get(name), str) or not str(receipt[name])
+            for name in text_fields
+        )
+    ):
+        raise PermissionError("Executive recovery receipt is invalid")
+    for name in {
+        "action_digest",
+        "observation_digest",
+        "approved_inactivity_observation_digest",
+    }:
+        digest = receipt.get(name)
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise PermissionError("Executive recovery receipt digest is invalid")
+    approved_inactivity = receipt.get("approved_inactivity_observation")
+    if (
+        not isinstance(approved_inactivity, dict)
+        or hashlib.sha256(_canonical(approved_inactivity)).hexdigest()
+        != receipt["approved_inactivity_observation_digest"]
+    ):
+        raise PermissionError(
+            "Executive recovery approved inactivity proof is invalid"
+        )
+    for name in {"consumed_at", "issued_at"}:
+        try:
+            timestamp = datetime.fromisoformat(str(receipt[name]))
+        except ValueError as error:
+            raise PermissionError("Executive recovery receipt time is invalid") from error
+        if timestamp.tzinfo is None:
+            raise PermissionError("Executive recovery receipt time is invalid")
+    if datetime.fromisoformat(str(receipt["consumed_at"])) > (
+        datetime.fromisoformat(str(receipt["issued_at"]))
+    ):
+        raise PermissionError("Executive recovery receipt predates approval consumption")
+    return receipt
+
+
+def validate_executive_recovery_receipt(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    if set(value) != _SIGNED_EXECUTIVE_RECOVERY_RECEIPT_FIELDS:
+        raise PermissionError("signed Executive recovery receipt fields are invalid")
+    unsigned = {name: value[name] for name in _EXECUTIVE_RECOVERY_RECEIPT_FIELDS}
+    _validate_executive_recovery_receipt_unsigned(unsigned)
+    for name in {"issuer_id", "issuer_key_id", "signature_algorithm", "signature"}:
+        if not isinstance(value.get(name), str) or not value[name]:
+            raise PermissionError("signed Executive recovery receipt is invalid")
     _unb64(str(value["signature"]))
     return dict(value)
 
@@ -512,6 +616,27 @@ class ProductionFounderCapabilityIssuer:
             ),
         }
 
+    def _sign_executive_recovery_receipt(
+        self, unsigned: Mapping[str, object]
+    ) -> dict[str, object]:
+        receipt = _validate_executive_recovery_receipt_unsigned(unsigned)
+        verifier = self.verifier_configuration()
+        signed = {
+            **receipt,
+            "issuer_id": verifier["issuer_id"],
+            "issuer_key_id": verifier["key_id"],
+            "signature_algorithm": CAPABILITY_ALGORITHM,
+        }
+        return {
+            **signed,
+            "signature": _b64(
+                _cng_sign(
+                    self.__key_name,
+                    _digest(EXECUTIVE_RECOVERY_RECEIPT_PURPOSE, signed),
+                )
+            ),
+        }
+
     def verifier_configuration(self) -> dict[str, object]:
         modulus, exponent = _cng_public_key(self.__key_name)
         public = {
@@ -593,6 +718,27 @@ class TestFounderCapabilityIssuer:
                 hmac.new(
                     _TEST_KEY,
                     EXECUTIVE_INPUT_RECEIPT_PURPOSE + _canonical(signed),
+                    hashlib.sha256,
+                ).digest()
+            ),
+        }
+
+    def sign_executive_recovery_receipt(
+        self, unsigned: Mapping[str, object]
+    ) -> dict[str, object]:
+        receipt = _validate_executive_recovery_receipt_unsigned(unsigned)
+        signed = {
+            **receipt,
+            "issuer_id": _TEST_ISSUER_ID,
+            "issuer_key_id": test_issuer_key_id(),
+            "signature_algorithm": TEST_CAPABILITY_ALGORITHM,
+        }
+        return {
+            **signed,
+            "signature": _b64(
+                hmac.new(
+                    _TEST_KEY,
+                    EXECUTIVE_RECOVERY_RECEIPT_PURPOSE + _canonical(signed),
                     hashlib.sha256,
                 ).digest()
             ),
@@ -683,6 +829,25 @@ class ProductionFounderCapabilityVerifier:
             )
         return {**receipt, "signature": signature}
 
+    def verify_executive_recovery_receipt(
+        self, value: Mapping[str, object]
+    ) -> dict[str, object]:
+        receipt = validate_executive_recovery_receipt(value)
+        signature = str(receipt.pop("signature"))
+        config = self.__configuration
+        if (
+            receipt.get("signature_algorithm") != CAPABILITY_ALGORITHM
+            or receipt.get("issuer_id") != config["issuer_id"]
+            or receipt.get("issuer_key_id") != config["key_id"]
+            or not _rsa_verify(
+                config,
+                _digest(EXECUTIVE_RECOVERY_RECEIPT_PURPOSE, receipt),
+                _unb64(signature),
+            )
+        ):
+            raise PermissionError("Executive recovery receipt authentication failed")
+        return {**receipt, "signature": signature}
+
 
 class TestFounderCapabilityVerifier:
     __slots__ = ()
@@ -731,6 +896,26 @@ class TestFounderCapabilityVerifier:
             raise PermissionError(
                 "Executive delivered-input receipt authentication failed"
             )
+        return {**receipt, "signature": signature}
+
+    def verify_executive_recovery_receipt(
+        self, value: Mapping[str, object]
+    ) -> dict[str, object]:
+        receipt = validate_executive_recovery_receipt(value)
+        signature = str(receipt.pop("signature"))
+        if (
+            receipt.get("signature_algorithm") != TEST_CAPABILITY_ALGORITHM
+            or receipt.get("issuer_id") != _TEST_ISSUER_ID
+            or receipt.get("issuer_key_id") != test_issuer_key_id()
+        ):
+            raise PermissionError("test Executive recovery receipt issuer is invalid")
+        expected = hmac.new(
+            _TEST_KEY,
+            EXECUTIVE_RECOVERY_RECEIPT_PURPOSE + _canonical(receipt),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(expected, _unb64(signature)):
+            raise PermissionError("Executive recovery receipt authentication failed")
         return {**receipt, "signature": signature}
 
 

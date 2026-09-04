@@ -87,9 +87,26 @@ class WorkflowCoordinator:
         self.startup_recovery = self.recover_interrupted_runs()
 
     def start(
-        self, task_id: str, metadata: dict[str, Any] | None = None
+        self,
+        task_id: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        validated_task: dict[str, Any],
+        task_digest: str,
     ) -> dict[str, Any]:
-        task = self._task(task_id)
+        claim = self.store.get("settings", f"task_launch_claim:{task_id}")
+        serialized = json.dumps(
+            validated_task, sort_keys=True, separators=(",", ":")
+        )
+        if (
+            not isinstance(claim, dict)
+            or claim.get("task_id") != task_id
+            or claim.get("task_digest") != task_digest
+            or hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+            != task_digest
+        ):
+            raise PermissionError("workflow task launch claim is invalid")
+        task = dict(validated_task)
         run_id = f"run-{uuid.uuid4().hex}"
         if (
             task.get("provider_policy") == "mock"
@@ -1571,25 +1588,53 @@ class WorkflowCoordinator:
                 "reviewer": "executive_reviewer",
                 "post_repair_reviewer": "executive_post_repair_reviewer",
             }.get(str(event["role"]), str(event["role"]))
-            reservation = self.authority.reserve_attempt(
-                registration_id=str(registration["trusted_registration_id"]),
-                keeper_run_id=run_id,
-                task_id=str(event["task_id"]),
-                stage_id=str(event["stage_id"]),
-                role=authority_role,
-                attempt_number=int(latest_route["attempt_number"]),
-                provider_run_id=provider_run_id,
-                provider_instance_id=str(event["provider_instance_id"]),
-                evidence_path=str(event["evidence_path"]),
-                prompt_path=str(event["prompt_path"]),
-                stdout_path=str(event["stdout_path"]),
-                stderr_path=str(event["stderr_path"]),
-                workspace=str(event["workspace"]),
-                timeout_seconds=int(event["timeout_seconds"]),
-                reasoning_level=str(event["reasoning_level"]),
-                environment=provider_environment,
-                provider_input_required=False,
-            )
+            reservation_identity = {
+                **event,
+                "attempt_number": latest_route.get("attempt_number"),
+                "retry_parent": latest_route.get("retry_of"),
+                "reroute_authorization_id": reroute_authorization_id,
+                "stable_registration_digest": route.get(
+                    "stable_registration_digest"
+                ),
+                "stable_registration": route.get("stable_registration"),
+                "executable": route.get("executable"),
+                "executable_sha256": route.get("executable_sha256"),
+                "completion_challenge": None,
+                "authority_attempt_id": None,
+                "authority_launch_challenge": None,
+                "authority_role": authority_role,
+            }
+            try:
+                reservation = self.authority.reserve_attempt(
+                    registration_id=str(registration["trusted_registration_id"]),
+                    keeper_run_id=run_id,
+                    task_id=str(event["task_id"]),
+                    stage_id=str(event["stage_id"]),
+                    role=authority_role,
+                    attempt_number=int(latest_route["attempt_number"]),
+                    provider_run_id=provider_run_id,
+                    provider_instance_id=str(event["provider_instance_id"]),
+                    evidence_path=str(event["evidence_path"]),
+                    prompt_path=str(event["prompt_path"]),
+                    stdout_path=str(event["stdout_path"]),
+                    stderr_path=str(event["stderr_path"]),
+                    workspace=str(event["workspace"]),
+                    timeout_seconds=int(event["timeout_seconds"]),
+                    reasoning_level=str(event["reasoning_level"]),
+                    environment=provider_environment,
+                    provider_input_required=False,
+                )
+            except Exception as error:
+                executions.append(
+                    {
+                        **reservation_identity,
+                        "status": "RESERVATION_REJECTED",
+                        "failure_reason": str(error),
+                    }
+                )
+                record["provider_execution_attempts"] = executions
+                self.store.upsert("runs", run_id, record)
+                raise
             authority_attempt = reservation.get("attempt")
             authority_attempt_id = reservation.get("attempt_id")
             if not isinstance(authority_attempt, dict) or not isinstance(
@@ -1600,22 +1645,11 @@ class WorkflowCoordinator:
                 )
             executions.append(
                 {
-                    **event,
-                    "attempt_number": latest_route.get("attempt_number"),
-                    "retry_parent": latest_route.get("retry_of"),
-                    "reroute_authorization_id": reroute_authorization_id,
-                    "stable_registration_digest": route.get(
-                        "stable_registration_digest"
-                    ),
-                    "stable_registration": route.get("stable_registration"),
-                    "executable": route.get("executable"),
-                    "executable_sha256": route.get("executable_sha256"),
-                    "completion_challenge": None,
+                    **reservation_identity,
                     "authority_attempt_id": authority_attempt_id,
                     "authority_launch_challenge": authority_attempt.get(
                         "launch_challenge"
                     ),
-                    "authority_role": authority_role,
                     "status": "EXECUTION_RESERVED",
                 }
             )
@@ -2221,7 +2255,7 @@ def _select_routes(
             str(stored.get("risk", "low")),
             "keeper",
             frozenset({author.provider_id}),
-            author.provider_id == "ollama",
+            author.provider_id == "qwen",
         ),
         real_diagnostics,
     )
@@ -2369,14 +2403,14 @@ def _adapter(
             raise RuntimeError("Authority Service client is unavailable")
         return AuthorityServiceProvider(authority_client, diagnostic.registration)
     if (
-        diagnostic.provider_id == "claude"
+        diagnostic.provider_id in {"claude", "gemini", "qwen"}
         and diagnostic.executable
         and diagnostic.registration
     ):
         if not isinstance(authority_client, AuthorityServiceClient):
             raise RuntimeError("Authority Service client is unavailable")
         return AuthorityServiceProvider(authority_client, diagnostic.registration)
-    if diagnostic.provider_id == "ollama":
+    if diagnostic.provider_id == "qwen":
         return OllamaProvider()
     if diagnostic.provider_id == "mock":
         return MockProvider(provider_name="mock")
@@ -2419,12 +2453,12 @@ def _routing_decision(
     executable_size = 0
     endpoint_identity = (
         "http://127.0.0.1:11434"
-        if diagnostic.provider_id == "ollama"
+        if diagnostic.provider_id == "qwen"
         else "local-process"
     )
     authentication_mode = (
         "external-cli-session"
-        if diagnostic.provider_id in {"codex", "claude"}
+        if diagnostic.provider_id in {"codex", "claude", "gemini", "qwen"}
         else "local-none"
     )
     capabilities = diagnostic.capabilities.to_dict() if hasattr(

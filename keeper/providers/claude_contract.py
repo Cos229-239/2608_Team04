@@ -15,7 +15,7 @@ CLAUDE_AUTHENTICODE_PUBLISHER = "Anthropic, PBC"
 CLAUDE_AUTHENTICODE_THUMBPRINT = "0D7581D2C51C59DF686C3000C70BF543F9F6C6CB"
 CLAUDE_ALLOWED_SUBSCRIPTION_PLANS = frozenset({"pro", "max"})
 CLAUDE_ALLOWED_EFFORTS = frozenset({"medium", "high"})
-CLAUDE_PINNED_REVIEW_MODEL = "claude-sonnet-4-6-20251114"
+CLAUDE_PINNED_REVIEW_MODEL = "claude-sonnet-4-6"
 CLAUDE_QUALIFICATION_NONCE = "keeper-claude-qualification-v1"
 CLAUDE_QUALIFICATION_PROMPT = (
     "Return only the JSON object required by the supplied schema. This is a "
@@ -343,7 +343,7 @@ def build_claude_exec_command(
         "--setting-sources=",
         "--strict-mcp-config",
         "--mcp-config",
-        "{}",
+        '{"mcpServers":{}}',
         "--disable-slash-commands",
         "--no-chrome",
         "--no-session-persistence",

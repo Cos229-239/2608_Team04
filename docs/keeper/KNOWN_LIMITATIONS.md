@@ -53,7 +53,7 @@
 - The signed restore fence contains one project-scoped Authority snapshot and is
   bounded by the Authority protocol message limit. Extremely large personal-use
   attempt histories require a future paged signed-snapshot/fence protocol.
-- This source requires KeeperAuthority 1.7.50, protocol 7, and schema 6. Application
+- This source requires KeeperAuthority 1.7.52, protocol 7, and schema 6. Application
   packaging never installs, restarts, updates, or reconfigures that service.
 - The Codex subscription provider is authoring-only. Independent approval remains
   paused until a separately qualified reviewer provider is available.
@@ -75,7 +75,7 @@
   Host-side canonical, profile, ACL, alias, emptiness, and replay checks fail
   closed before process creation.
 - Provider Host installation and enrollment are mechanically separate. The
-  1.7.50 Host is release-locked to KeeperAuthority 1.7.50, protocol 7, and schema 6;
+  1.7.52 Host is release-locked to KeeperAuthority 1.7.52, protocol 7, and schema 6;
   older or newer Authority releases fail closed before enrollment. Source 1.7.1
   added the Founder-authenticated protocol-7 enrollment proposal/grant/proof/
   receipt/revocation lifecycle and permits an enrolled Host to start without a
@@ -90,14 +90,14 @@
   publisher certificate. Live installation, Authority migration/restart, Founder
   enrollment, Codex registration/qualification, and model execution remain
   separately authorized operations.
-- KeeperAuthority 1.7.50 requires the Host-signed durable launch journal to prove
+- KeeperAuthority 1.7.52 requires the Host-signed durable launch journal to prove
   zero `CLAIMED`, `STARTED`, `RUNNING`, or `UNCERTAIN` work before registration,
   qualification, or active-enrollment revocation. `READY`/`IDLE` alone is not a
   zero-work proof. The supported reconciliation command is deliberately limited
   to an exact uncertain registration probe with conservative read-only-effect
   accounting; uncertain qualification and provider execution require separate
   Founder disposition and cannot be terminalized by this command.
-- Provider Host 1.7.50 resolves and grants the exact KeeperAuthority service SID
+- Provider Host 1.7.52 resolves and grants the exact KeeperAuthority service SID
   on its protected named pipe so the restricted Windows service token can connect.
   Restricted Code remains explicitly denied, and every connected client must still
   pass the signed protocol and exact Authority process measurement before any Host
@@ -107,12 +107,12 @@
   grants that same exact service SID only process-query-limited access to its own
   process object; the Host validates the impersonated restricted service thread token
   and never opens the Authority process token.
-- Provider Host 1.7.50 authenticates the restricted service token under bounded
+- Provider Host 1.7.52 authenticates the restricted service token under bounded
   client impersonation, positively reverts, and only then observes the exact
   Authority process through the enrolled-user QLI-only grant. The Authority
   installation remains protected from Host traversal, and the signed hello plus
   enrollment receipt bind the canonical image path, digest, and file identity.
-  Provider Host 1.7.50 measures its packaged Windows process image with the
+  Provider Host 1.7.52 measures its packaged Windows process image with the
   operating-system process-image API. It does not trust Nuitka's bundled
   `sys.executable`, command-line arguments, or caller-supplied paths when binding
   the running Host to its signed installed executable. During every Authority
@@ -129,7 +129,7 @@
   Operators invoke it through `keeper-authority
   codex-reconcile-qualification`; diagnostics keep the Host in
   `QUALIFICATION_UNCERTAIN` with a Founder action until recovery completes.
-- Keeper 1.7.50 also persists stable Authority registration and qualification
+- Keeper 1.7.52 also persists stable Authority registration and qualification
   claims before Host setup work and retains signed terminal setup results in the
   Host journal. This closes the terminal-Host-result/Authority-crash duplicate
   window, including duplicate Medium-effort qualification requests. A crash
@@ -139,7 +139,7 @@
   provider-execution ambiguity is never automatically replayed and requires
   Founder disposition.
 - A terminal `QUALIFICATION_FAILED` record is not silently replayable. Keeper
-  1.7.50 permits one explicit Founder-authorized retry bound to the exact failed
+  1.7.52 permits one explicit Founder-authorized retry bound to the exact failed
   qualification digest, registration, client identity, and matching
   Authority/Host release. The failed record is retained, the retry identity is
   deterministic and atomically reserved, and failure of that retry is terminal.
@@ -150,14 +150,14 @@
   a malicious local administrator, manual same-user database replacement, or
   unsupported in-process plugins. Those are future service-isolation hardening
   scenarios, not supported-path release claims.
-- Keeper 1.7.50 can terminalize a Host-signed failed registration probe without
+- Keeper 1.7.52 can terminalize a Host-signed failed registration probe without
   replaying it. The signed failure exposes only bounded stage/code and
   digest/byte-count process evidence. Legacy 1.7.39 failures remain
   recoverable but correctly report `DETAIL_UNAVAILABLE`. Founder disposition
   permits abandon or one exact new probe generation; there is no automatic or
   repeated retry.
 - After that exact generation-2 retry fails with signed zero-effect accounting,
-  KeeperAuthority 1.7.50 permits one separate Founder-authorized successor
+  KeeperAuthority 1.7.52 permits one separate Founder-authorized successor
   registration family. The predecessor remains permanently
   `REGISTRATION_EXHAUSTED`; one deterministic successor carries signed
   predecessor/failure/request/capability lineage plus an exact sanitized
@@ -175,7 +175,7 @@
   successor without rewriting evidence. Unactivated replacements cannot cross
   a release boundary, and all account/executable/client/failure bindings remain
   mandatory.
-- Keeper 1.7.50 has one deliberately non-general recovery operation for the
+- Keeper 1.7.52 has one deliberately non-general recovery operation for the
   exact 1.7.47 Claude pre-dispatch defect. It is release-, artifact-, provider-,
   enrollment-, client-, request-, setup-, challenge-, process-termination-, and
   zero-effect-bound. The historical Host proposal and Authority grant and

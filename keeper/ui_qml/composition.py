@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from keeper.authority_service.client import ProductionAuthorityServiceClient
-from keeper.pass_b.application import PassBApplication
+from keeper.pass_b.application import (
+    PassBApplication,
+    authority_exchange_root_from_diagnostics,
+)
 from keeper.pass_b.repository import validate_protected_workspace_tree
 from keeper.ui.view_models import SETUP_STEPS
 
@@ -98,12 +101,15 @@ def desktop_pass_b_application(
             from keeper.pass_b.provider_bridge import bridge_qualified_provider
             from keeper.pass_b.usage_authority import ProductionUsageResetVerifier
 
+            exchange_root = authority_exchange_root_from_diagnostics(
+                health_client.diagnostics()
+            )
             result = PassBApplication(
                 data_directory,
                 authority_client=health_client,
                 authority_health_client=health_client,
                 provider_bindings=bindings,
-                authority_exchange_root=data_directory / "authority-exchange",
+                authority_exchange_root=exchange_root,
                 usage_reset_verifier=ProductionUsageResetVerifier.unavailable(),
             )
             for binding in bindings:

@@ -49,11 +49,17 @@ from keeper.providers.claude_contract import (
 )
 
 
-SERVICE_VERSION = "1.7.50"
+SERVICE_VERSION = "1.7.52"
 RESTORE_FENCE_LIFETIME = timedelta(minutes=2)
 _LEGACY_PREDISPATCH_AUTHORITY_VERSION = "1.7.47"
 _LEGACY_PREDISPATCH_AUTHORITY_PACKAGE_SHA256 = (
     "19102c5ed7ad2a278c18d49284a8fbea0a189031d4ee4ddf55ed4687120e2211"
+)
+_LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_EXECUTABLE_SHA256 = (
+    "03168c01b7b7491423350e82c26fee71f35b43694d1319d3c668bda6903a0c38"
+)
+_LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_PEER_DIGEST = (
+    "da25662c9921d468fc039fe1bcbde86be791570c66fa335f50c6d604bc381fbc"
 )
 _LEGACY_PREDISPATCH_HOST_VERSION = "1.7.47"
 _LEGACY_PREDISPATCH_HOST_EXECUTABLE_SHA256 = (
@@ -74,6 +80,8 @@ _LEGACY_PREDISPATCH_EFFECT_ACCOUNTING = {
     "usage_reservation_count": 0,
 }
 _PROVIDER_HOST_EXCLUSIVE_OPERATIONS = {
+    Operation.OBSERVE_UNCERTAIN_PROVIDER_ATTEMPT,
+    Operation.FINALIZE_UNCERTAIN_PROVIDER_ATTEMPT_DISPOSITION,
     Operation.BEGIN_PROVIDER_HOST_ENROLLMENT,
     Operation.COMPLETE_PROVIDER_HOST_ENROLLMENT,
     Operation.RECONCILE_PROVIDER_HOST_ENROLLMENT,
@@ -435,6 +443,12 @@ class AuthorityServiceCore:
             Operation.RECORD_PROVIDER_START: self._record_provider_start,
             Operation.FINALIZE_COMPLETION: self._finalize_completion,
             Operation.QUERY_STATE: self._query_state,
+            Operation.OBSERVE_UNCERTAIN_PROVIDER_ATTEMPT: (
+                self._observe_uncertain_provider_attempt
+            ),
+            Operation.FINALIZE_UNCERTAIN_PROVIDER_ATTEMPT_DISPOSITION: (
+                self._finalize_uncertain_provider_attempt_disposition
+            ),
             Operation.RECONCILE_EXECUTIVE_RESTORE: (
                 self._reconcile_executive_restore
             ),
@@ -1181,6 +1195,8 @@ class AuthorityServiceCore:
                 "enrollment_id",
                 "legacy_authority_version",
                 "legacy_authority_package_sha256",
+                "legacy_authority_runtime_executable_sha256",
+                "legacy_authority_runtime_peer_digest",
                 "legacy_host_version",
                 "legacy_host_executable_sha256",
                 "legacy_host_manifest_sha256",
@@ -1199,6 +1215,16 @@ class AuthorityServiceCore:
                 "legacy Authority package digest",
             )
             != _LEGACY_PREDISPATCH_AUTHORITY_PACKAGE_SHA256
+            or _sha256_text(
+                payload["legacy_authority_runtime_executable_sha256"],
+                "legacy Authority runtime executable digest",
+            )
+            != _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_EXECUTABLE_SHA256
+            or _sha256_text(
+                payload["legacy_authority_runtime_peer_digest"],
+                "legacy Authority runtime peer digest",
+            )
+            != _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_PEER_DIGEST
             or payload["legacy_host_version"] != _LEGACY_PREDISPATCH_HOST_VERSION
             or _sha256_text(
                 payload["legacy_host_executable_sha256"],
@@ -1256,6 +1282,8 @@ class AuthorityServiceCore:
                 "enrollment_id",
                 "event_challenge_digest",
                 "legacy_authority_package_sha256",
+                "legacy_authority_runtime_executable_sha256",
+                "legacy_authority_runtime_peer_digest",
                 "legacy_authority_version",
                 "legacy_host_executable_sha256",
                 "legacy_host_manifest_sha256",
@@ -1358,7 +1386,9 @@ class AuthorityServiceCore:
             or str(installation.get("manifest_sha256", "")).casefold()
             != _LEGACY_PREDISPATCH_HOST_MANIFEST_SHA256
             or str(authority_peer.get("executable_sha256", "")).casefold()
-            != _LEGACY_PREDISPATCH_AUTHORITY_PACKAGE_SHA256
+            != _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_EXECUTABLE_SHA256
+            or _canonical_digest(authority_peer)
+            != _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_PEER_DIGEST
         ):
             raise PermissionError(
                 "legacy Provider Host enrollment does not match the bounded defect"
@@ -1387,6 +1417,12 @@ class AuthorityServiceCore:
             ).hexdigest(),
             "legacy_authority_package_sha256": (
                 _LEGACY_PREDISPATCH_AUTHORITY_PACKAGE_SHA256
+            ),
+            "legacy_authority_runtime_executable_sha256": (
+                _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_EXECUTABLE_SHA256
+            ),
+            "legacy_authority_runtime_peer_digest": (
+                _LEGACY_PREDISPATCH_AUTHORITY_RUNTIME_PEER_DIGEST
             ),
             "legacy_authority_version": _LEGACY_PREDISPATCH_AUTHORITY_VERSION,
             "legacy_host_executable_sha256": (
@@ -1913,7 +1949,11 @@ class AuthorityServiceCore:
         )
         if (
             payload["attempt_generation"] != 2
-            or expected_account_plan_type not in CODEX_ALLOWED_SUBSCRIPTION_PLANS
+            or expected_account_plan_type
+            not in (
+                CODEX_ALLOWED_SUBSCRIPTION_PLANS
+                | CLAUDE_ALLOWED_SUBSCRIPTION_PLANS
+            )
             or payload["required_authority_version"] != SERVICE_VERSION
             or payload["required_host_version"] != SERVICE_VERSION
             or payload["effect_accounting"]
@@ -1980,6 +2020,22 @@ class AuthorityServiceCore:
         start = current.get("start")
         failure = current.get("failure")
         request_binding = current.get("request_binding")
+        provider_id = (
+            request_binding.get("provider_id")
+            if isinstance(request_binding, dict)
+            else None
+        )
+        eligible_failure = (
+            provider_id == "codex"
+            and failure.get("failure_stage") == "ACCOUNT_PROBE_VALIDATE"
+            and failure.get("failure_code") == "PERMISSION_REJECTED"
+        ) or (
+            provider_id == "claude"
+            and failure.get("failure_stage") == "VERSION_LAUNCH"
+            and failure.get("failure_code") == "PERMISSION_REJECTED"
+            and failure.get("process_result")
+            == {"detail_status": "DETAIL_UNAVAILABLE"}
+        ) if isinstance(failure, dict) else False
         if (
             current.get("kind") != "provider_registration_failed"
             or "registration_lineage" in current
@@ -1995,8 +2051,7 @@ class AuthorityServiceCore:
             or not isinstance(failure, dict)
             or not self.keys.verify("provider-registration-failure", failure)
             or _canonical_digest(failure) != failure_digest
-            or failure.get("failure_stage") != "ACCOUNT_PROBE_VALIDATE"
-            or failure.get("failure_code") != "PERMISSION_REJECTED"
+            or not eligible_failure
             or failure.get("effect_accounting")
             != {
                 "registration_persisted": False,
@@ -2244,7 +2299,9 @@ class AuthorityServiceCore:
         }
         if set(payload) not in {frozenset(base_fields), frozenset(subscription_fields)}:
             raise ValueError("authority operation payload fields are invalid")
-        provider_id = _choice(payload["provider_id"], {"codex", "claude"})
+        provider_id = _choice(
+            payload["provider_id"], {"codex", "claude", "gemini", "qwen"}
+        )
         executable = Path(_text(payload["executable"], "provider executable"))
         executive_capabilities = payload["executive_capabilities"]
         project_types = payload["project_types"]
@@ -2866,7 +2923,7 @@ class AuthorityServiceCore:
             payload["required_host_version"], "required Host version"
         )
         if (
-            retry_generation != 2
+            retry_generation not in {2, 3}
             or required_authority_version != SERVICE_VERSION
             or required_host_version != SERVICE_VERSION
         ):
@@ -2875,6 +2932,11 @@ class AuthorityServiceCore:
             )
         registration_record = self.store.get("registrations", registration_id)
         qualification_record = self.store.get("qualifications", qualification_id)
+        expected_qualification_fields = (
+            {"start", "evidence"}
+            if retry_generation == 2
+            else {"start", "evidence", "retry_authorization"}
+        )
         if (
             registration_record is None
             or registration_record.pop("service_state", None)
@@ -2886,12 +2948,15 @@ class AuthorityServiceCore:
             or qualification_record is None
             or qualification_record.pop("service_state", None)
             != "QUALIFICATION_FAILED"
-            or set(qualification_record) != {"start", "evidence"}
+            or set(qualification_record) != expected_qualification_fields
         ):
             raise PermissionError(
                 "Provider qualification has no exact terminal failure for retry"
             )
         evidence = qualification_record.get("evidence")
+        prior_retry_authorization = qualification_record.get(
+            "retry_authorization"
+        )
         if (
             not isinstance(evidence, dict)
             or not self.keys.verify("provider-qualification", evidence)
@@ -2902,6 +2967,21 @@ class AuthorityServiceCore:
         ):
             raise PermissionError(
                 "Provider qualification terminal failure evidence is invalid"
+            )
+        if retry_generation == 3 and (
+            not isinstance(prior_retry_authorization, dict)
+            or not self.keys.verify(
+                "provider-qualification-retry-authorization",
+                prior_retry_authorization,
+            )
+            or prior_retry_authorization.get("registration_id")
+            != registration_id
+            or prior_retry_authorization.get("retry_qualification_id")
+            != qualification_id
+            or prior_retry_authorization.get("retry_generation") != 2
+        ):
+            raise PermissionError(
+                "Provider qualification final retry lineage is invalid"
             )
         action_binding = {
             "action": "AUTHORIZE_PROVIDER_QUALIFICATION_RETRY",
@@ -2973,7 +3053,7 @@ class AuthorityServiceCore:
                 "state": str(existing["service_state"]),
             }
         authorization_id = (
-            f"provider-qualification-retry:{registration_id}:generation:2"
+            f"provider-qualification-retry:{registration_id}:generation:{retry_generation}"
         )
         event_challenge = secrets.token_hex(32)
         authorization = self.keys.sign(
@@ -3155,7 +3235,7 @@ class AuthorityServiceCore:
                 "QUALIFICATION_FAILED",
             }
             if subscription_qualification
-            else {"REGISTERED_UNQUALIFIED"}
+            else {"REGISTERED_UNQUALIFIED", "QUALIFICATION_STARTED"}
         )
         if registration_state not in eligible_states:
             raise PermissionError("registration is not eligible for qualification")
@@ -3209,6 +3289,33 @@ class AuthorityServiceCore:
         qualification_id = f"provider-qualification:{uuid.uuid4().hex}"
         retry_authorization: dict[str, Any] | None = None
         recovering_qualification = registration_state == "QUALIFICATION_STARTED"
+        legacy_generic_recovery = False
+        if not subscription_qualification:
+            pending = [
+                item
+                for item in self.store.list_records("qualifications")
+                if item.get("service_state") == "EXECUTION_STARTED"
+                and isinstance(item.get("start"), dict)
+                and item["start"].get("registration_id") == identifier
+            ]
+            if len(pending) > 1:
+                raise PermissionError(
+                    "Provider qualification recovery identity is ambiguous"
+                )
+            if pending:
+                start_id = pending[0]["start"].get("id")
+                if (
+                    not isinstance(start_id, str)
+                    or not start_id.endswith(":started")
+                ):
+                    raise PermissionError(
+                        "Provider qualification recovery identity is invalid"
+                    )
+                qualification_id = start_id.removesuffix(":started")
+                recovering_qualification = True
+                legacy_generic_recovery = (
+                    registration_state == "REGISTERED_UNQUALIFIED"
+                )
         if subscription_qualification:
             if qualification_retry:
                 qualification_id = _text(
@@ -3240,7 +3347,7 @@ class AuthorityServiceCore:
                     != qualification_id
                     or retry_authorization.get("authorized_client_sid")
                     != client_sid
-                    or retry_authorization.get("retry_generation") != 2
+                    or retry_authorization.get("retry_generation") not in {2, 3}
                     or retry_authorization.get("required_authority_version")
                     != SERVICE_VERSION
                     or retry_authorization.get("required_host_version")
@@ -3363,7 +3470,7 @@ class AuthorityServiceCore:
                 canonical_provider_registration_digest(normalized)
             )
             return normalized
-        if registration_state == "QUALIFICATION_STARTED":
+        if registration_state == "QUALIFICATION_STARTED" or legacy_generic_recovery:
             qualification = self.store.get("qualifications", qualification_id)
             if (
                 qualification is None
@@ -3432,7 +3539,7 @@ class AuthorityServiceCore:
                     challenge=challenge,
                 )
                 registration_state = "QUALIFICATION_STARTED"
-            elif subscription_qualification:
+            else:
                 self.store.begin_provider_qualification(
                     identifier,
                     qualification_id,
@@ -3441,15 +3548,6 @@ class AuthorityServiceCore:
                     challenge=challenge,
                 )
                 registration_state = "QUALIFICATION_STARTED"
-            else:
-                self.store.insert(
-                    "qualifications",
-                    qualification_id,
-                    "EXECUTION_STARTED",
-                    {"start": start},
-                    registration_id=identifier,
-                    challenge=challenge,
-                )
         if qualification_retry:
             # Keep the exact terminal failure payload durably attached to the
             # QUALIFICATION_STARTED row.  It is the restart-time binding for
@@ -3682,7 +3780,7 @@ class AuthorityServiceCore:
                 qualification_record,
             )
             updated = completed_registration
-        elif subscription_qualification:
+        else:
             if state == "QUALIFIED":
                 self.store.complete_provider_qualification(
                     identifier,
@@ -3699,21 +3797,6 @@ class AuthorityServiceCore:
                     qualification_record,
                     expected_registration=registration_state,
                 )
-        else:
-            self.store.transition(
-                "qualifications",
-                qualification_id,
-                "EXECUTION_STARTED",
-                state,
-                qualification_record,
-            )
-            self.store.transition(
-                "registrations",
-                identifier,
-                "REGISTERED_UNQUALIFIED",
-                state,
-                updated,
-            )
         return {
             "registration": updated,
             "qualification": evidence,
@@ -4957,6 +5040,13 @@ class AuthorityServiceCore:
         ):
             raise ValueError("Authority restore project scope is invalid")
         project_scope = set(scope_value)
+        self.store.reconcile_executive_identity(
+            client_sid,
+            source_database_id,
+            source_epoch,
+            target_database_id,
+            target_epoch,
+        )
         attempts = sorted(
             (
                 record
@@ -5121,6 +5211,288 @@ class AuthorityServiceCore:
         value = self.store.get(table, identifier)
         return {"found": value is not None, "record": value}
 
+    def _observe_uncertain_provider_attempt(
+        self, payload: dict[str, Any], client_sid: str
+    ) -> dict[str, Any]:
+        """Prove one exact uncertain execution is absent from the live Host."""
+
+        _exact(payload, {"attempt_id"})
+        attempt_id = _text(payload["attempt_id"], "attempt ID")
+        attempt = self.store.get("attempts", attempt_id)
+        if attempt is None:
+            raise PermissionError("provider attempt is unavailable")
+        state = attempt.pop("service_state", None)
+        if (
+            state != "UNCERTAIN"
+            or attempt.get("authorized_client_sid") != client_sid
+            or attempt.get("kind") != "provider_launch_claim"
+            or attempt.get("launch_claim_state") != "UNCERTAIN"
+        ):
+            raise PermissionError(
+                "provider attempt is not an exact uncertain launch claim"
+            )
+        launch_id = _text(
+            attempt.get("claim_transaction_id"), "launch transaction ID"
+        )
+        authority_attempt_id = _text(attempt.get("id"), "attempt ID")
+        observer = self.observer
+        gateway = getattr(observer, "provider_host_gateway", None)
+        if gateway is None:
+            raise PermissionError(
+                "authenticated Provider Host observation is unavailable"
+            )
+        host = gateway.recovery_barrier()
+        journal = host.get("launch_journal")
+        launches = journal.get("launches") if isinstance(journal, dict) else None
+        if (
+            host.get("state") != "READY"
+            or not isinstance(launches, list)
+            or any(
+                isinstance(item, dict)
+                and (
+                    item.get("authority_attempt_id") == authority_attempt_id
+                    or item.get("launch_id") == launch_id
+                )
+                for item in launches
+            )
+        ):
+            raise PermissionError(
+                "exact provider execution inactivity is not proven"
+            )
+        coordinator = self._provider_host_enrollment_coordinator()
+        enrollment_record = coordinator.store.current_provider_host_enrollment()
+        if (
+            not isinstance(enrollment_record, dict)
+            or enrollment_record.get("service_state") != "ACTIVE"
+        ):
+            raise PermissionError(
+                "current Provider Host enrollment is not active"
+            )
+        enrollment_id = _text(
+            enrollment_record.get("enrollment_id"),
+            "Provider Host enrollment ID",
+        )
+        validated_enrollment = coordinator.validate_completed_enrollment_record(
+            enrollment_record, expected_enrollment_id=enrollment_id
+        )
+        proposal = validated_enrollment["proposal"]
+        if host.get("host_id") != proposal.get("host_id"):
+            raise PermissionError(
+                "observed Provider Host differs from active enrollment"
+            )
+        enrollment = coordinator.status()
+        enrollment_generation = _positive_int(
+            enrollment.get("enrollment_generation"),
+            "Provider Host enrollment generation",
+        )
+        observation = self.keys.sign(
+            "uncertain-provider-attempt-observation",
+            {
+                "schema_version": 1,
+                "kind": "uncertain_provider_attempt_observation",
+                "service_key_id": self.keys.current_key_id,
+                "authorized_client_sid": client_sid,
+                "authority_attempt_id": authority_attempt_id,
+                "authority_attempt_record_digest": structured_digest(
+                    {**attempt, "service_state": state}
+                ),
+                "launch_id": launch_id,
+                "host_id": _text(host.get("host_id"), "Provider Host ID"),
+                "enrollment_id": enrollment_id,
+                "enrollment_generation": enrollment_generation,
+                "launch_journal_summary_digest": _sha256_text(
+                    journal.get("summary_digest")
+                    if isinstance(journal, dict)
+                    else None,
+                    "Provider Host launch journal digest",
+                ),
+                "recovery_barrier_generation": _positive_int(
+                    journal.get("recovery_barrier_generation")
+                    if isinstance(journal, dict)
+                    else None,
+                    "Provider Host recovery barrier generation",
+                ),
+                "launch_state": (
+                    "ABSENT_FROM_ACTIVE_OR_UNCERTAIN_JOURNAL"
+                ),
+                "disposition_readiness": "EXACT_ATTEMPT_INACTIVE",
+            },
+        )
+        return {"observation": observation}
+
+    def _finalize_uncertain_provider_attempt_disposition(
+        self, payload: dict[str, Any], client_sid: str
+    ) -> dict[str, Any]:
+        """Durably terminalize one exact inactive uncertain execution."""
+
+        _exact(payload, {"attempt_id", "executive_recovery_receipt"})
+        attempt_id = _text(payload["attempt_id"], "attempt ID")
+        receipt_value = payload["executive_recovery_receipt"]
+        if not isinstance(receipt_value, dict):
+            raise PermissionError("Executive recovery receipt is unavailable")
+        verifier = self.founder_capability_verifier
+        if verifier is None:
+            raise PermissionError("Executive recovery receipt verification is unavailable")
+        receipt = verifier.verify_executive_recovery_receipt(receipt_value)
+        expected_mode = (
+            "PRODUCTION"
+            if type(verifier) is ProductionFounderCapabilityVerifier
+            else "TEST"
+            if type(verifier) is TestFounderCapabilityVerifier
+            else None
+        )
+        if (
+            expected_mode is None
+            or receipt.get("repository_mode") != expected_mode
+            or receipt.get("authority_attempt_id") != attempt_id
+        ):
+            raise PermissionError("Executive recovery receipt is mismatched")
+        executive_receipt_digest = _canonical_digest(receipt)
+        attempt = self.store.get("attempts", attempt_id)
+        if attempt is None:
+            raise PermissionError("provider attempt is unavailable")
+        state = attempt.pop("service_state", None)
+        if attempt.get("authorized_client_sid") != client_sid:
+            raise PermissionError("provider attempt belongs to another client")
+        self.store.assert_or_bind_executive_identity(
+            client_sid,
+            _text(receipt.get("database_id"), "Executive database ID"),
+            _nonnegative_int(
+                receipt.get("recovery_epoch"), "Executive recovery epoch"
+            ),
+        )
+        if state == "FOUNDER_DISPOSITIONED":
+            if (
+                attempt.get("executive_recovery_receipt_digest")
+                != executive_receipt_digest
+                or not self.keys.verify(
+                    "uncertain-provider-attempt-disposition", attempt
+                )
+            ):
+                raise PermissionError("provider disposition differs from durable state")
+            return {"disposition": attempt, "attempt_id": attempt_id}
+        issued_at = datetime.fromisoformat(str(receipt["issued_at"]))
+        now = datetime.now(UTC)
+        if (
+            issued_at > now + timedelta(seconds=5)
+            or issued_at < now - timedelta(minutes=5)
+        ):
+            raise PermissionError("Executive recovery receipt is stale")
+        if (
+            state != "UNCERTAIN"
+            or attempt.get("authorized_client_sid") != client_sid
+            or attempt.get("kind") != "provider_launch_claim"
+            or attempt.get("launch_claim_state") != "UNCERTAIN"
+        ):
+            raise PermissionError("provider attempt is not dispositionable")
+        expected = {
+            "project_id": attempt.get("project_id"),
+            "execution_charter_id": attempt.get("charter_id"),
+            "execution_charter_revision": attempt.get("charter_revision"),
+            "assignment_id": attempt.get("task_id"),
+        }
+        mismatches = [
+            name
+            for name, value in expected.items()
+            if receipt.get(name) != value
+        ]
+        if mismatches:
+            raise PermissionError(
+                "Executive recovery receipt binding mismatch: "
+                + ", ".join(sorted(mismatches))
+            )
+        approved_inactivity = receipt["approved_inactivity_observation"]
+        if (
+            not isinstance(approved_inactivity, dict)
+            or not self.keys.verify(
+                "uncertain-provider-attempt-observation", approved_inactivity
+            )
+            or _canonical_digest(approved_inactivity)
+            != receipt["approved_inactivity_observation_digest"]
+        ):
+            raise PermissionError(
+                "Executive recovery approved inactivity proof is invalid"
+            )
+        inactivity = self._observe_uncertain_provider_attempt(
+            {"attempt_id": attempt_id}, client_sid
+        )["observation"]
+        identity_fields = {
+            "authority_attempt_id",
+            "launch_id",
+            "host_id",
+            "enrollment_id",
+            "enrollment_generation",
+            "launch_state",
+            "disposition_readiness",
+        }
+        if (
+            any(
+                inactivity.get(name) != approved_inactivity.get(name)
+                for name in identity_fields
+            )
+            or _positive_int(
+                inactivity.get("recovery_barrier_generation"),
+                "final recovery barrier generation",
+            )
+            < _positive_int(
+                approved_inactivity.get("recovery_barrier_generation"),
+                "approved recovery barrier generation",
+            )
+        ):
+            raise PermissionError(
+                "final provider inactivity proof crossed Host enrollment identity"
+            )
+        disposition = self.keys.sign(
+            "uncertain-provider-attempt-disposition",
+            {
+                "schema_version": 1,
+                "kind": "uncertain_provider_attempt_disposition",
+                "id": f"provider-attempt-disposition:{attempt_id}",
+                "authority_attempt_id": attempt_id,
+                "authority_attempt_record_digest": _canonical_digest(
+                    {**attempt, "service_state": state}
+                ),
+                "project_id": receipt["project_id"],
+                "charter_id": receipt["execution_charter_id"],
+                "charter_revision": receipt["execution_charter_revision"],
+                "approval_charter_id": receipt["charter_id"],
+                "approval_charter_revision": receipt["charter_revision"],
+                "assignment_id": receipt["assignment_id"],
+                "pass_b_attempt_id": receipt["pass_b_attempt_id"],
+                "action_id": receipt["action_id"],
+                "action_digest": receipt["action_digest"],
+                "approval_id": receipt["approval_id"],
+                "approval_event_id": receipt["approval_event_id"],
+                "founder_identity": receipt["founder_identity"],
+                "observation_digest": receipt["observation_digest"],
+                "approved_inactivity_observation": approved_inactivity,
+                "approved_inactivity_observation_digest": receipt[
+                    "approved_inactivity_observation_digest"
+                ],
+                "executive_recovery_receipt": receipt,
+                "executive_recovery_receipt_digest": executive_receipt_digest,
+                "inactivity_observation": inactivity,
+                "inactivity_observation_digest": _canonical_digest(inactivity),
+                "terminal_disposition": (
+                    "FOUNDER_ABANDONED_UNCERTAIN_EXTERNAL_EXECUTION"
+                ),
+                "possible_external_effect_preserved": True,
+                "result_accepted": False,
+                "retry_authorized": False,
+                "usage_disposition": "CONSUME_UPPER_BOUND",
+                "authorized_client_sid": client_sid,
+                "disposed_at": _now(),
+            },
+        )
+        self.store.transition(
+            "attempts",
+            attempt_id,
+            "UNCERTAIN",
+            "FOUNDER_DISPOSITIONED",
+            disposition,
+        )
+        return {"disposition": disposition, "attempt_id": attempt_id}
+
     def _verify_evidence(
         self, payload: dict[str, Any], client_sid: str
     ) -> dict[str, Any]:
@@ -5137,6 +5509,8 @@ class AuthorityServiceCore:
                 "provider-launch-claim",
                 "provider-start",
                 "provider-completion",
+                "uncertain-provider-attempt-observation",
+                "uncertain-provider-attempt-disposition",
                 "provider-usage-wait",
                 "executive-restore-reconciliation",
                 "executive-restore-reconciliation-fence",
@@ -5284,7 +5658,10 @@ class AuthorityServiceCore:
                     "pricing_authority",
                 },
             )
-            provider_id = _choice(old.get("logical_provider_id"), {"codex", "claude"})
+            provider_id = _choice(
+                old.get("logical_provider_id"),
+                {"codex", "claude", "gemini", "qwen"},
+            )
             executable = Path(
                 _text(old.get("canonical_executable_path"), "legacy executable")
             )
@@ -5445,9 +5822,13 @@ def _replacement_registration_id(
     failure_digest: str,
     request_identity_digest: str,
 ) -> str:
-    return "keeper-provider:codex:v1:" + hashlib.sha256(
+    match = re.fullmatch(r"keeper-provider:(codex|claude):v1:[0-9a-f]{32}", predecessor_id)
+    if match is None:
+        raise PermissionError("provider registration predecessor identity is invalid")
+    provider_id = match.group(1)
+    return f"keeper-provider:{provider_id}:v1:" + hashlib.sha256(
         (
-            "codex-subscription-registration-successor-v1\0"
+            f"{provider_id}-subscription-registration-successor-v1\0"
             + predecessor_id
             + "\0"
             + failure_digest
@@ -5547,7 +5928,10 @@ def _validated_registration_replacement_lineage(
             and value.get("required_authority_version") != SERVICE_VERSION
         )
         or value.get("expected_account_plan_type")
-        not in CODEX_ALLOWED_SUBSCRIPTION_PLANS
+        not in (
+            CODEX_ALLOWED_SUBSCRIPTION_PLANS
+            | CLAUDE_ALLOWED_SUBSCRIPTION_PLANS
+        )
     ):
         raise PermissionError("provider registration replacement lineage is malformed")
     for name in {
@@ -5561,15 +5945,20 @@ def _validated_registration_replacement_lineage(
         "request_identity_digest",
     }:
         _sha256_text(value.get(name), name.replace("_", " "))
+    predecessor_match = re.fullmatch(
+        r"keeper-provider:(codex|claude):v1:[0-9a-f]{32}",
+        str(value.get("predecessor_registration_id", "")),
+    )
+    successor_match = re.fullmatch(
+        r"keeper-provider:(codex|claude):v1:[0-9a-f]{32}",
+        str(value.get("successor_registration_id", "")),
+    )
     if (
         _positive_int(value.get("expected_executable_size"), "provider executable size")
         <= 0
-        or not str(value.get("predecessor_registration_id", "")).startswith(
-            "keeper-provider:codex:v1:"
-        )
-        or not str(value.get("successor_registration_id", "")).startswith(
-            "keeper-provider:codex:v1:"
-        )
+        or predecessor_match is None
+        or successor_match is None
+        or predecessor_match.group(1) != successor_match.group(1)
         or value.get("predecessor_registration_id")
         == value.get("successor_registration_id")
     ):

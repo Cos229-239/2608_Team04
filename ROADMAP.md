@@ -15,7 +15,7 @@
 2. Replace historical DarkSage compatibility identifiers through a versioned live migration only after full recovery testing.
 3. Add repository-native CI for Keeper-focused tests, static checks, packaging, and Windows security tests.
 4. Extend the reviewed subscription-provider boundary to additional opt-in providers without weakening the common authority contract; Claude reviewer support is the first multi-provider implementation.
-5. Improve Desktop provider diagnostics and supported recovery UX.
+5. Improve Desktop provider diagnostics and supported recovery UX, including global uncertainty visibility and exact Founder disposition backed by authenticated Host inactivity proof and exact write-claim binding.
 6. Reduce retained protected diagnostic output where hashes are sufficient.
 
 ## Non-goals

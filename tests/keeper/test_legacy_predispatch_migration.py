@@ -39,6 +39,30 @@ HOST = EnvelopeTestIdentity("host-test", b"host-migration-key")
 LEGACY_AUTHORITY_SHA256 = (
     "19102c5ed7ad2a278c18d49284a8fbea0a189031d4ee4ddf55ed4687120e2211"
 )
+LEGACY_AUTHORITY_RUNTIME_SHA256 = (
+    "03168c01b7b7491423350e82c26fee71f35b43694d1319d3c668bda6903a0c38"
+)
+LEGACY_AUTHORITY_RUNTIME_PEER_DIGEST = (
+    "da25662c9921d468fc039fe1bcbde86be791570c66fa335f50c6d604bc381fbc"
+)
+LEGACY_AUTHORITY_RUNTIME_PEER: dict[str, object] = {
+    "executable_file_identity": {
+        "device_id": 10687299546425997470,
+        "file_id": 38843546786400626,
+        "modified_ns": 1784784211561092900,
+        "schema_version": 1,
+        "size": 106208,
+    },
+    "executable_path": (
+        r"C:\ProgramData\Keeper\AuthorityService\bin\runtime\python.exe"
+    ),
+    "executable_sha256": LEGACY_AUTHORITY_RUNTIME_SHA256,
+    "session_id": 0,
+    "user_sid": (
+        "S-1-5-80-2356840725-804452443-284127515-"
+        "2255543944-4244344575"
+    ),
+}
 LEGACY_HOST_SHA256 = (
     "e81327789faff88c187c007182268049fb81ca4974f02a0ba53e6618a1340fae"
 )
@@ -224,19 +248,7 @@ def _fixture(
     proof_digest = "b" * 64
     runtime_configuration = {
         "authority_id": AUTHORITY.identity,
-        "authority_peer": {
-            "executable_file_identity": {
-                "device_id": 4,
-                "file_id": 5,
-                "modified_ns": 6,
-                "schema_version": 1,
-                "size": 7,
-            },
-            "executable_path": str(tmp_path / "keeper-authority.pyz"),
-            "executable_sha256": LEGACY_AUTHORITY_SHA256,
-            "session_id": 0,
-            "user_sid": "S-1-5-18",
-        },
+        "authority_peer": copy.deepcopy(LEGACY_AUTHORITY_RUNTIME_PEER),
         "authority_public_identity": _public(AUTHORITY),
         "enrollment_id": enrollment_id,
         "host_id": HOST.identity,
@@ -337,6 +349,12 @@ def _request(
             str(start["event_challenge"]).encode("utf-8")
         ).hexdigest(),
         "legacy_authority_package_sha256": LEGACY_AUTHORITY_SHA256,
+        "legacy_authority_runtime_executable_sha256": (
+            LEGACY_AUTHORITY_RUNTIME_SHA256
+        ),
+        "legacy_authority_runtime_peer_digest": (
+            LEGACY_AUTHORITY_RUNTIME_PEER_DIGEST
+        ),
         "legacy_authority_version": "1.7.47",
         "legacy_host_executable_sha256": LEGACY_HOST_SHA256,
         "legacy_host_manifest_sha256": LEGACY_HOST_MANIFEST_SHA256,

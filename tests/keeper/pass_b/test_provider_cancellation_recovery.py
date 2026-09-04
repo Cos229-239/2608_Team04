@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from keeper.pass_b.models import (
     AttemptRecord,
     ProviderAccountRecord,
     ProviderSessionRecord,
+    UncertainExecutionDispositionRecord,
     UncertaintyReconciliationRecord,
     UsagePoolRecord,
     WorkspaceReservationRecord,
@@ -26,7 +29,7 @@ from keeper.pass_b.models import (
 )
 from keeper.pass_b.orchestration import authority_envelope_digest
 from keeper.pass_b.pilot import PilotConversationExecutive
-from keeper.pass_b.providers import LocalMockAdapter
+from keeper.pass_b.providers import AdapterResult, LocalMockAdapter
 from keeper.pass_b.usage_authority import TestUsageResetVerifier
 from tests.keeper.pass_b.test_orchestration import _authorize
 
@@ -174,6 +177,118 @@ def _running(
         write,
         execution_path,
     )
+
+
+def test_signed_completed_execution_reconciles_restart_uncertainty(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, attempt, workspace, write, _ = _running(
+        tmp_path
+    )
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+
+    def reconcile(
+        current_assignment: AssignmentRecord,
+        current_attempt: AttemptRecord,
+        current_workspace: WorkspaceReservationRecord,
+    ) -> AdapterResult:
+        assert current_assignment.assignment_id == assignment.assignment_id
+        assert current_attempt.attempt_id == attempt.attempt_id
+        assert (
+            current_workspace.workspace_reservation_id
+            == workspace.workspace_reservation_id
+        )
+        return AdapterResult(
+            external_execution_id=current_attempt.authority_attempt_id,
+            summary="Authority recovered completed planner assignment.",
+            artifacts=(
+                {
+                    "kind": "structured-report",
+                    "path": None,
+                    "digest": "a" * 64,
+                    "execution_requested": False,
+                },
+            ),
+            usage=None,
+        )
+
+    application.orchestration.completed_execution_reconciler = reconcile
+    evidence = application.reconcile_completed_uncertain_execution(
+        assignment.assignment_id
+    )
+
+    assert evidence is not None
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.COMPLETED
+    assert application.repository.get(
+        AssignmentRecord, assignment.assignment_id
+    ).state == AssignmentState.REVIEW_REQUIRED
+    assert application.repository.get(
+        WorkspaceReservationRecord, workspace.workspace_reservation_id
+    ).state == ReservationState.ACTIVE
+    assert application.repository.get(
+        WriteReservationRecord, write.write_reservation_id
+    ).state == ReservationState.ACTIVE
+    session = application.repository.get(
+        ProviderSessionRecord, assignment.session_id
+    )
+    assert session.state == "READY"
+    assert session.active_assignments == 0
+
+
+def test_nonterminal_authority_state_keeps_execution_uncertain(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, attempt, workspace, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    application.orchestration.completed_execution_reconciler = (
+        lambda current_assignment, current_attempt, current_workspace: None
+    )
+
+    assert (
+        application.reconcile_completed_uncertain_execution(
+            assignment.assignment_id
+        )
+        is None
+    )
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.UNCERTAIN
+    assert application.repository.get(
+        WorkspaceReservationRecord, workspace.workspace_reservation_id
+    ).state == ReservationState.UNCERTAIN
+
+
+def test_recovered_completion_identity_mismatch_fails_closed(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, attempt, _, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    application.orchestration.completed_execution_reconciler = (
+        lambda current_assignment, current_attempt, current_workspace: (
+            AdapterResult(
+                external_execution_id="wrong-authority-attempt",
+                summary="mismatched",
+                artifacts=(),
+                usage=None,
+            )
+        )
+    )
+
+    with pytest.raises(PermissionError, match="identity does not match"):
+        application.reconcile_completed_uncertain_execution(
+            assignment.assignment_id
+        )
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.UNCERTAIN
 
 
 def test_cancel_side_effect_then_exception_is_durably_uncertain(
@@ -458,6 +573,498 @@ def test_ordinary_execution_uncertainty_cannot_use_cancel_reconciliation(
             assignment.assignment_id,
             observation_digest=hashlib.sha256(b"not a cancel").hexdigest(),
         )
+
+
+def test_exact_founder_disposition_releases_stale_execution_fence(
+    tmp_path: Path,
+) -> None:
+    (
+        application,
+        _,
+        assignment,
+        attempt,
+        workspace,
+        write,
+        _,
+    ) = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    request = (
+        application.request_uncertain_execution_disposition_approval(
+            assignment.assignment_id
+        )
+    )
+    confirmed = application.confirm_recovery_action_approval(
+        FounderApprovalChallenge.from_dict(request["challenge"])
+    )
+    approval_id = str(confirmed["approval"]["approval_id"])
+
+    disposed = (
+        application.apply_uncertain_execution_disposition_approval(
+            assignment.assignment_id,
+            observation_digest=str(request["observation_digest"]),
+            approval_id=approval_id,
+        )
+    )
+
+    assert disposed["state"] == AttemptState.FAILED
+    assert disposed["uncertainty_kind"] is None
+    assert disposed["session_slot_claimed"] is False
+    assert "possible external effect" in str(disposed["last_error"])
+    assert application.repository.get(
+        AssignmentRecord, assignment.assignment_id
+    ).state == AssignmentState.CANCELED
+    assert application.repository.get(
+        ProviderSessionRecord, assignment.session_id
+    ).active_assignments == 0
+    assert application.repository.get(
+        ProviderSessionRecord, assignment.session_id
+    ).state == "READY"
+    assert application.repository.get(
+        WorkspaceReservationRecord, workspace.workspace_reservation_id
+    ).state == ReservationState.RELEASED
+    assert application.repository.get(
+        WriteReservationRecord, write.write_reservation_id
+    ).state == ReservationState.RELEASED
+    assert application.repository.usage_reservations(
+        assignment.assignment_id
+    )[0]["state"] == "CONSUMED"
+    assert application.repository.launch_claim(attempt.attempt_id)[
+        "state"
+    ] == AttemptState.FAILED
+    records = application.repository.list(
+        UncertainExecutionDispositionRecord,
+        project_id=assignment.project_id,
+    )
+    assert len(records) == 1
+    assert records[0].possible_external_effect_preserved is True
+    assert records[0].usage_reservation_consumed is True
+    assert records[0].usage_amount == 1
+    assert records[0].usage_reservation_id == attempt.usage_reservation_id
+    assert records[0].approval_id == approval_id
+
+
+def test_uncertain_execution_disposition_rejects_changed_observation(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, _, _, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    request = (
+        application.request_uncertain_execution_disposition_approval(
+            assignment.assignment_id
+        )
+    )
+    confirmed = application.confirm_recovery_action_approval(
+        FounderApprovalChallenge.from_dict(request["challenge"])
+    )
+    wrong_digest = hashlib.sha256(b"different observation").hexdigest()
+
+    with pytest.raises(
+        PermissionError,
+        match="recovery authority binding is invalid",
+    ):
+        application.apply_uncertain_execution_disposition_approval(
+            assignment.assignment_id,
+            observation_digest=wrong_digest,
+            approval_id=str(confirmed["approval"]["approval_id"]),
+        )
+
+
+def test_uncertain_execution_disposition_binds_exact_write_claims(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, _, _, write, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    request = application.request_uncertain_execution_disposition_approval(
+        assignment.assignment_id
+    )
+    changed = application.repository.get(
+        WriteReservationRecord, write.write_reservation_id
+    )
+    with application.repository.store.connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        application.repository._replace(
+            connection,
+            replace(
+                changed,
+                owner_token="changed-after-founder-observation",
+                revision=changed.revision + 1,
+            ),
+            changed.revision,
+        )
+        connection.commit()
+
+    with pytest.raises(
+        (PermissionError, KeyError),
+        match="approval|record not found",
+    ):
+        application.apply_uncertain_execution_disposition_approval(
+            assignment.assignment_id,
+            observation_digest=str(request["observation_digest"]),
+            approval_id="unconsumed-approval",
+        )
+    assert application.repository.get(
+        WriteReservationRecord, write.write_reservation_id
+    ).state == ReservationState.UNCERTAIN
+
+
+def test_uncertain_execution_disposition_requires_exact_inactivity_proof(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, _, _, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    application.orchestration.uncertain_execution_observer = (
+        lambda authority_attempt_id: {
+            "authority_attempt_id": authority_attempt_id,
+            "disposition_readiness": "BLOCKED_ACTIVE",
+            "launch_state": "RUNNING",
+        }
+    )
+
+    with pytest.raises(
+        PermissionError, match="inactivity is not proven"
+    ):
+        application.request_uncertain_execution_disposition_approval(
+            assignment.assignment_id
+        )
+
+
+def test_uncertain_execution_disposition_is_not_replayable(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, _, _, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    request = (
+        application.request_uncertain_execution_disposition_approval(
+            assignment.assignment_id
+        )
+    )
+    confirmed = application.confirm_recovery_action_approval(
+        FounderApprovalChallenge.from_dict(request["challenge"])
+    )
+    application.apply_uncertain_execution_disposition_approval(
+        assignment.assignment_id,
+        observation_digest=str(request["observation_digest"]),
+        approval_id=str(confirmed["approval"]["approval_id"]),
+    )
+
+    with pytest.raises(PermissionError):
+        application.apply_uncertain_execution_disposition_approval(
+            assignment.assignment_id,
+            observation_digest=str(request["observation_digest"]),
+            approval_id=str(confirmed["approval"]["approval_id"]),
+        )
+
+
+def test_current_charter_can_disposition_older_uncertain_execution(
+    tmp_path: Path,
+) -> None:
+    application, executive, assignment, _, _, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    revised = application.conversation.revise(
+        assignment.project_id,
+        {"purpose": "Continue only after exact Founder recovery."},
+    )
+    challenge = application.conversation.request_approval(
+        assignment.project_id
+    )
+    _, current_charter = executive.approve_and_activate(challenge)
+    application.conversation.record_approval(current_charter)
+    assert current_charter.revision > assignment.charter_revision
+    assert revised.charter.revision == current_charter.revision
+
+    request = (
+        application.request_uncertain_execution_disposition_approval(
+            assignment.assignment_id
+        )
+    )
+    confirmed = application.confirm_recovery_action_approval(
+        FounderApprovalChallenge.from_dict(request["challenge"])
+    )
+    application.apply_uncertain_execution_disposition_approval(
+        assignment.assignment_id,
+        observation_digest=str(request["observation_digest"]),
+        approval_id=str(confirmed["approval"]["approval_id"]),
+    )
+
+    record = application.repository.list(
+        UncertainExecutionDispositionRecord,
+        project_id=assignment.project_id,
+    )[0]
+    assert record.charter_revision == assignment.charter_revision
+    assert record.approval_charter_revision == current_charter.revision
+    assert record.approval_charter_id == current_charter.charter_id
+
+
+def test_monotonic_recovery_proofs_bind_initial_approval_and_newer_finalization(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, _, _, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    generation = 0
+
+    def observe(authority_attempt_id: str) -> dict[str, object]:
+        nonlocal generation
+        generation += 1
+        return {
+            "schema_version": 1,
+            "kind": "uncertain_provider_attempt_observation",
+            "authority_attempt_id": authority_attempt_id,
+            "host_id": "host-monotonic-test",
+            "enrollment_id": "enrollment-monotonic-test",
+            "enrollment_generation": 7,
+            "launch_id": "launch-monotonic-test",
+            "launch_state": "ABSENT_FROM_ACTIVE_OR_UNCERTAIN_JOURNAL",
+            "disposition_readiness": "EXACT_ATTEMPT_INACTIVE",
+            "recovery_barrier_generation": generation,
+        }
+
+    def finalize(
+        authority_attempt_id: str,
+        receipt: dict[str, object],
+    ) -> dict[str, object]:
+        inactivity = observe(authority_attempt_id)
+        return {
+            "schema_version": 1,
+            "kind": "uncertain_provider_attempt_disposition",
+            "authority_attempt_id": authority_attempt_id,
+            "project_id": receipt["project_id"],
+            "charter_id": receipt["execution_charter_id"],
+            "charter_revision": receipt["execution_charter_revision"],
+            "approval_charter_id": receipt["charter_id"],
+            "approval_charter_revision": receipt["charter_revision"],
+            "assignment_id": receipt["assignment_id"],
+            "pass_b_attempt_id": receipt["pass_b_attempt_id"],
+            "action_id": receipt["action_id"],
+            "action_digest": receipt["action_digest"],
+            "approval_id": receipt["approval_id"],
+            "approval_event_id": receipt["approval_event_id"],
+            "observation_digest": receipt["observation_digest"],
+            "inactivity_observation": inactivity,
+            "inactivity_observation_digest": hashlib.sha256(
+                json.dumps(
+                    inactivity, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest(),
+            "terminal_disposition": (
+                "FOUNDER_ABANDONED_UNCERTAIN_EXTERNAL_EXECUTION"
+            ),
+            "possible_external_effect_preserved": True,
+            "result_accepted": False,
+            "retry_authorized": False,
+        }
+
+    application.orchestration.uncertain_execution_observer = observe
+    application.orchestration.uncertain_execution_finalizer = finalize
+    request = application.request_uncertain_execution_disposition_approval(
+        assignment.assignment_id
+    )
+    assert generation == 1
+    confirmed = application.confirm_recovery_action_approval(
+        FounderApprovalChallenge.from_dict(request["challenge"])
+    )
+    application.apply_uncertain_execution_disposition_approval(
+        assignment.assignment_id,
+        observation_digest=str(request["observation_digest"]),
+        approval_id=str(confirmed["approval"]["approval_id"]),
+    )
+    assert generation == 3
+
+
+def test_recovery_disposition_rejects_host_reenrollment_after_approval(
+    tmp_path: Path,
+) -> None:
+    application, _, assignment, _, _, _, _ = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    generation = 0
+
+    def observe(authority_attempt_id: str) -> dict[str, object]:
+        nonlocal generation
+        generation += 1
+        return {
+            "authority_attempt_id": authority_attempt_id,
+            "host_id": "host-before" if generation == 1 else "host-after",
+            "enrollment_id": (
+                "enrollment-before" if generation == 1 else "enrollment-after"
+            ),
+            "enrollment_generation": generation,
+            "launch_id": "launch-stable",
+            "recovery_barrier_generation": generation,
+            "disposition_readiness": "EXACT_ATTEMPT_INACTIVE",
+            "launch_state": "ABSENT_FROM_ACTIVE_OR_UNCERTAIN_JOURNAL",
+        }
+
+    application.orchestration.uncertain_execution_observer = observe
+    request = application.request_uncertain_execution_disposition_approval(
+        assignment.assignment_id
+    )
+    confirmed = application.confirm_recovery_action_approval(
+        FounderApprovalChallenge.from_dict(request["challenge"])
+    )
+
+    with pytest.raises(PermissionError, match="signed Executive recovery receipt"):
+        application.apply_uncertain_execution_disposition_approval(
+            assignment.assignment_id,
+            observation_digest=str(request["observation_digest"]),
+            approval_id=str(confirmed["approval"]["approval_id"]),
+        )
+
+
+def test_disposition_cleanup_failure_rolls_back_every_local_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        application,
+        _,
+        assignment,
+        attempt,
+        workspace,
+        write,
+        _,
+    ) = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    request = (
+        application.request_uncertain_execution_disposition_approval(
+            assignment.assignment_id
+        )
+    )
+    confirmed = application.confirm_recovery_action_approval(
+        FounderApprovalChallenge.from_dict(request["challenge"])
+    )
+    original_consume_usage = application.repository._consume_usage
+    authority_receipts: list[dict[str, object]] = []
+    original_finalizer = application.orchestration.uncertain_execution_finalizer
+    assert original_finalizer is not None
+
+    def record_finalization(
+        authority_attempt_id: str,
+        executive_receipt: dict[str, object],
+    ) -> dict[str, object]:
+        authority_receipts.append(executive_receipt)
+        return original_finalizer(authority_attempt_id, executive_receipt)
+
+    application.orchestration.uncertain_execution_finalizer = record_finalization
+
+    def fail_usage_accounting(*args: object) -> None:
+        del args
+        raise OSError("simulated usage accounting failure")
+
+    monkeypatch.setattr(
+        application.repository, "_consume_usage", fail_usage_accounting
+    )
+    with pytest.raises(OSError, match="usage accounting failure"):
+        application.apply_uncertain_execution_disposition_approval(
+            assignment.assignment_id,
+            observation_digest=str(request["observation_digest"]),
+            approval_id=str(confirmed["approval"]["approval_id"]),
+        )
+
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.UNCERTAIN
+    assert application.repository.get(
+        AssignmentRecord, assignment.assignment_id
+    ).state == AssignmentState.UNCERTAIN
+    assert application.repository.get(
+        ProviderSessionRecord, assignment.session_id
+    ).active_assignments == 1
+    assert application.repository.get(
+        WorkspaceReservationRecord, workspace.workspace_reservation_id
+    ).state == ReservationState.UNCERTAIN
+    assert application.repository.get(
+        WriteReservationRecord, write.write_reservation_id
+    ).state == ReservationState.UNCERTAIN
+    assert application.repository.list(
+        UncertainExecutionDispositionRecord,
+        project_id=assignment.project_id,
+    ) == []
+
+    monkeypatch.setattr(
+        application.repository, "_consume_usage", original_consume_usage
+    )
+    retried = application.apply_uncertain_execution_disposition_approval(
+        assignment.assignment_id,
+        observation_digest=str(request["observation_digest"]),
+        approval_id=str(confirmed["approval"]["approval_id"]),
+    )
+    assert retried["state"] == AttemptState.FAILED
+    assert len(authority_receipts) == 2
+    assert authority_receipts[0] == authority_receipts[1]
+
+
+def test_authority_finalization_failure_preserves_every_local_claim(
+    tmp_path: Path,
+) -> None:
+    (
+        application,
+        _,
+        assignment,
+        attempt,
+        workspace,
+        write,
+        _,
+    ) = _running(tmp_path)
+    application.repository.recover_interrupted_attempts(
+        application.orchestration._now()
+    )
+    request = application.request_uncertain_execution_disposition_approval(
+        assignment.assignment_id
+    )
+    confirmed = application.confirm_recovery_action_approval(
+        FounderApprovalChallenge.from_dict(request["challenge"])
+    )
+
+    def reject_finalization(
+        authority_attempt_id: str,
+        executive_receipt: dict[str, object],
+    ) -> dict[str, object]:
+        del authority_attempt_id, executive_receipt
+        raise PermissionError("simulated Authority refusal")
+
+    application.orchestration.uncertain_execution_finalizer = reject_finalization
+    with pytest.raises(PermissionError, match="Authority refusal"):
+        application.apply_uncertain_execution_disposition_approval(
+            assignment.assignment_id,
+            observation_digest=str(request["observation_digest"]),
+            approval_id=str(confirmed["approval"]["approval_id"]),
+        )
+
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.UNCERTAIN
+    assert application.repository.get(
+        AssignmentRecord, assignment.assignment_id
+    ).state == AssignmentState.UNCERTAIN
+    assert application.repository.get(
+        ProviderSessionRecord, assignment.session_id
+    ).active_assignments == 1
+    assert application.repository.get(
+        WorkspaceReservationRecord, workspace.workspace_reservation_id
+    ).state == ReservationState.UNCERTAIN
+    assert application.repository.get(
+        WriteReservationRecord, write.write_reservation_id
+    ).state == ReservationState.UNCERTAIN
+    assert application.repository.usage_reservations(
+        assignment.assignment_id
+    )[0]["state"] == "ACTIVE"
 
 
 def test_stale_charter_rejects_cancellation_reconciliation(

@@ -362,6 +362,10 @@ class ProviderHostServer:
             }
         elif operation == "status":
             result = self.runtime.status()
+        elif operation == "recovery_barrier":
+            if body:
+                raise PermissionError("Provider Host recovery barrier body is invalid")
+            result = self.runtime.recovery_barrier()
         elif operation == "lock":
             self.runtime.lock_workstation()
             result = self.runtime.status()
@@ -474,6 +478,7 @@ def _validated_request(
             "setup",
             "cancel",
             "status",
+            "recovery_barrier",
             "lock",
             "drain",
             "reconcile_uncertain_launch",

@@ -131,7 +131,12 @@ def build_product_view(
                 created_at=_optional_text(message.get("created_at")),
             )
         )
-    if proposal:
+    proposal_is_active = bool(
+        active_charter
+        and proposal.get("charter_id") == active_charter.get("charter_id")
+        and proposal.get("charter_revision") == active_charter.get("revision")
+    )
+    if proposal and (approval_required or not proposal_is_active):
         timeline.append(
             TimelineItem(
                 kind="approval" if approval_required else "status",
@@ -176,17 +181,48 @@ def build_product_view(
         )
 
     work_items = _rows(project.get("work_items"))
-    assignments = _rows(project.get("assignments"))
-    workflow_rows = tuple(
-        {
-            "title": item.get("title", item.get("work_item_id", "Work item")),
-            "role": _first_role(item),
-            "status": item.get("state", "PROPOSED"),
-            "dependencies": tuple(item.get("dependencies") or ()),
-            "assignment": _assignment_for(item, assignments),
-        }
-        for item in work_items
+    active_charter_id = charter_detail.get("charter_id")
+    active_charter_revision = (
+        charter_detail.get("revision")
+        or project.get("charter_revision")
     )
+    identified_work_items = [
+        item
+        for item in work_items
+        if item.get("charter_id") is not None
+        or item.get("charter_revision") is not None
+    ]
+    if identified_work_items and active_charter_revision is not None:
+        work_items = [
+            item
+            for item in identified_work_items
+            if item.get("charter_revision") == active_charter_revision
+            and (
+                not active_charter_id
+                or not item.get("charter_id")
+                or item.get("charter_id") == active_charter_id
+            )
+        ]
+    assignments = _rows(project.get("assignments"))
+    workflow_rows_list: list[dict[str, Any]] = []
+    for item in work_items:
+        assignment = _assignment_for(item, assignments)
+        workflow_rows_list.append(
+            {
+                "title": item.get(
+                    "title", item.get("work_item_id", "Work item")
+                ),
+                "role": _first_role(item),
+                "status": (
+                    assignment.get("state")
+                    if assignment
+                    else item.get("state", "PROPOSED")
+                ),
+                "dependencies": tuple(item.get("dependencies") or ()),
+                "assignment": assignment,
+            }
+        )
+    workflow_rows = tuple(workflow_rows_list)
     project_cards = (
         {
             "title": project_title,
@@ -487,7 +523,7 @@ def _charter_summary(proposal: dict[str, Any]) -> str:
         or intake.get("original_message")
         or "Review the proposed project boundaries."
     )
-    return f"Revision {proposal.get('charter_revision', 1)} ? {objective}"
+    return f"Revision {proposal.get('charter_revision', 1)} — {objective}"
 
 
 def _first_role(item: dict[str, Any]) -> str:

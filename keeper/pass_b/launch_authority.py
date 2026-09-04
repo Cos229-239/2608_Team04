@@ -21,6 +21,7 @@ from keeper.authority_service.client import (
 from keeper.executive.service import KeeperExecutive
 from keeper.pass_b.models import (
     AssignmentRecord,
+    AttemptRecord,
     ProviderRecord,
     WorkflowRecord,
     WorkItemRecord,
@@ -151,6 +152,7 @@ class ExecutiveAuthorityLaunchGate:
         *,
         production: bool,
         receipt_issuer: CommittedInputReceiptIssuer,
+        exchange_root: Path | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         if production and not isinstance(
@@ -165,6 +167,7 @@ class ExecutiveAuthorityLaunchGate:
         self._project_status = project_status
         self._production = production
         self._receipt_issuer = receipt_issuer
+        self._exchange_root = exchange_root.resolve() if exchange_root else None
         self._clock = clock or (lambda: datetime.now(UTC))
 
     @classmethod
@@ -172,6 +175,7 @@ class ExecutiveAuthorityLaunchGate:
         cls,
         executive: KeeperExecutive,
         authority: ProductionAuthorityServiceClient,
+        exchange_root: Path | None = None,
     ) -> ExecutiveAuthorityLaunchGate:
         authority.require_live_identity()
         return cls(
@@ -179,6 +183,7 @@ class ExecutiveAuthorityLaunchGate:
             lambda project_id: _status_dict(executive, project_id),
             production=True,
             receipt_issuer=executive.issue_pass_b_delivered_input_receipt,
+            exchange_root=exchange_root,
         )
 
     @classmethod
@@ -522,6 +527,111 @@ class ExecutiveAuthorityLaunchGate:
         return AdapterResult(
             external_execution_id=authorization.authority_attempt_id,
             summary=f"Authority completed {request.role.casefold()} assignment.",
+            artifacts=(artifact,),
+            usage=None,
+            session_resume_token=None,
+        )
+
+    def reconcile_completed_execution(
+        self,
+        assignment: AssignmentRecord,
+        attempt: AttemptRecord,
+        workspace: WorkspaceReservationRecord,
+    ) -> AdapterResult | None:
+        """Recover one authenticated terminal result missed by local restart."""
+
+        if self._exchange_root is None:
+            raise PermissionError("Authority evidence exchange is unavailable")
+        state = self._authority.query_state(
+            "attempts", attempt.authority_attempt_id
+        )
+        completion = state.get("record")
+        if not state.get("found") or not isinstance(completion, dict):
+            return None
+        completion = dict(completion)
+        service_state = completion.pop("service_state", None)
+        if service_state != "COMPLETED":
+            return None
+        expected = {
+            "attempt_id": attempt.authority_attempt_id,
+            "project_id": assignment.project_id,
+            "charter_id": assignment.charter_id,
+            "charter_revision": assignment.charter_revision,
+            "task_id": assignment.assignment_id,
+            "stage_id": assignment.work_item_id,
+            "role": assignment.role.casefold(),
+            "provider_instance_id": assignment.session_id,
+            "model_id": assignment.model_id,
+            "provider_run_id": attempt.launch_token,
+            "normalized_result": "completed",
+            "delivered_input_digest": attempt.delivered_input_digest,
+            "provider_input_digest": attempt.provider_input_digest,
+        }
+        mismatches = [
+            name
+            for name, value in expected.items()
+            if _comparable(completion.get(name)) != _comparable(value)
+        ]
+        if (
+            mismatches
+            or not self._authority.verify("provider-completion", completion)
+        ):
+            raise PermissionError(
+                "Authority terminal completion binding is invalid"
+            )
+        exchange_root = self._exchange_root.resolve(strict=True)
+        attempt_root = (
+            exchange_root
+            / _digest(assignment.project_id)[:12]
+            / _digest(assignment.assignment_id)[:12]
+            / _digest(attempt.launch_token)[:12]
+        ).resolve(strict=True)
+        if not attempt_root.is_relative_to(exchange_root):
+            raise PermissionError("Authority evidence path escaped its exchange")
+        stdout_path = attempt_root / "stdout.txt"
+        stderr_path = attempt_root / "stderr.txt"
+        if (
+            not stdout_path.is_file()
+            or stdout_path.stat().st_size > 10_000_000
+            or (stderr_path.exists() and not stderr_path.is_file())
+            or (
+                stderr_path.is_file()
+                and stderr_path.stat().st_size > 10_000_000
+            )
+            or completion.get("provider_evidence_digest")
+            != _recoverable_execution_evidence_digest(
+                stdout_path, stderr_path
+            )
+        ):
+            raise PermissionError(
+                "Authority recovered provider output identity is invalid"
+            )
+        try:
+            output = json.loads(stdout_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise PermissionError(
+                "Authority recovered provider output is malformed"
+            ) from error
+        if not isinstance(output, dict):
+            raise PermissionError(
+                "Authority recovered provider output must be structured data"
+            )
+        if assignment.role.casefold() == "reviewer":
+            raise PermissionError(
+                "reviewer completion recovery requires committed review input"
+            )
+        artifact: dict[str, Any] = {
+            "kind": "structured-report",
+            "path": None,
+            "digest": hashlib.sha256(stdout_path.read_bytes()).hexdigest(),
+            "execution_requested": False,
+        }
+        return AdapterResult(
+            external_execution_id=attempt.authority_attempt_id,
+            summary=(
+                f"Authority recovered completed "
+                f"{assignment.role.casefold()} assignment."
+            ),
             artifacts=(artifact,),
             usage=None,
             session_resume_token=None,
@@ -938,6 +1048,27 @@ def _execution_evidence_digest(
                 ).hexdigest(),
                 "stderr_sha256": hashlib.sha256(
                     stderr_path.read_bytes()
+                ).hexdigest(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _recoverable_execution_evidence_digest(
+    stdout_path: Path, stderr_path: Path
+) -> str:
+    """Match the Authority observer, which hashes a missing stream as empty."""
+
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "stdout_sha256": hashlib.sha256(
+                    stdout_path.read_bytes() if stdout_path.exists() else b""
+                ).hexdigest(),
+                "stderr_sha256": hashlib.sha256(
+                    stderr_path.read_bytes() if stderr_path.exists() else b""
                 ).hexdigest(),
             },
             sort_keys=True,

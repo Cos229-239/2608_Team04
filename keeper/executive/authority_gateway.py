@@ -820,6 +820,12 @@ class AuthorityBackedSpecialistGateway:
                 "Authority attempt reservation binding is invalid"
             )
 
+    def query_attempt(self, attempt_id: str) -> dict[str, Any]:
+        return self._authority.query_state("attempts", attempt_id)
+
+    def authority_identity(self) -> dict[str, Any]:
+        return self._authority.diagnostics()
+
     def execute(
         self,
         plan: AuthorityExecutionPlan,
