@@ -458,7 +458,9 @@ class ProviderDiscovery:
                 (path for candidate in candidates if (path := shutil.which(candidate))),
                 None,
             )
+
         registration = self.registrations.get(identifier)
+
         valid, detail = _validate_discovery_registration(
             identifier,
             executable,
@@ -466,6 +468,18 @@ class ProviderDiscovery:
             self.qualification_evidence,
             self.authority_verifier,
         )
+
+        if executable is None:
+            detail = (
+                f"{display_name} executable was not found. "
+                "Install the provider CLI or configure its executable path."
+            )
+        elif not valid:
+            detail = (
+                f"{display_name} executable was found, but its provider "
+                f"registration or authorization is not valid. {detail}"
+            )
+
         capabilities = (
             ProviderCapabilities(**dict(registration["capability_set"]))
             if valid and registration

@@ -148,8 +148,9 @@ def test_discovery_includes_blocked_gemini_without_an_executable() -> None:
     assert gemini.available is False
     assert gemini.discovery_state == "unavailable"
     assert gemini.detail == (
-        "Executable was not found; configure its full path in Settings."
-    )
+    "Gemini CLI command executable was not found. "
+    "Install the provider CLI or configure its executable path."
+)
 
 
 def test_discovery_always_includes_available_mock() -> None:
