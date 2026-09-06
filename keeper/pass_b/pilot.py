@@ -154,6 +154,37 @@ class PilotConversationExecutive:
     def propose_charter(self, charter: ProjectCharter) -> ProjectCharter:
         return self.charters.propose(charter)
 
+    def active_charter(self, project_id: str) -> ProjectCharter:
+        project = self.repository.project(project_id)
+        if (
+            project.active_charter_id is None
+            or project.active_charter_revision is None
+        ):
+            raise PermissionError("project does not have an active charter")
+        charter = self.repository.charter(project.active_charter_id)
+        if (
+            charter.project_id != project_id
+            or charter.revision != project.active_charter_revision
+            or charter.status != "ACTIVE"
+        ):
+            raise PermissionError("project active charter binding is invalid")
+        return charter
+
+    def revise_charter(
+        self,
+        active: ProjectCharter,
+        intake: IntakeResult,
+        *,
+        reason: str,
+        authority_basis: str,
+    ) -> ProjectCharter:
+        return self.charters.revise_from_intake(
+            active,
+            intake,
+            reason=reason,
+            authority_basis=authority_basis,
+        )
+
     def request_charter_approval(
         self, charter: ProjectCharter
     ) -> FounderApprovalChallenge:
@@ -205,6 +236,29 @@ class PilotConversationExecutive:
             action,
             approval_id=approval_id,
             task_id=task_id,
+        )
+
+    def issue_uncertain_execution_disposition_receipt(
+        self,
+        action: ProposedAction,
+        *,
+        approval_id: str,
+        authority_attempt_id: str,
+        pass_b_attempt_id: str,
+        assignment_id: str,
+        execution_charter_id: str,
+        execution_charter_revision: int,
+        observation_digest: str,
+    ) -> dict[str, object]:
+        return self.repository.issue_uncertain_execution_disposition_receipt(
+            action,
+            approval_id=approval_id,
+            authority_attempt_id=authority_attempt_id,
+            pass_b_attempt_id=pass_b_attempt_id,
+            assignment_id=assignment_id,
+            execution_charter_id=execution_charter_id,
+            execution_charter_revision=execution_charter_revision,
+            observation_digest=observation_digest,
         )
 
     def approve_and_activate(

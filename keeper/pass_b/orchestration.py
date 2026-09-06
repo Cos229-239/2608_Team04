@@ -56,6 +56,7 @@ from keeper.pass_b.models import (
     ResumeCheckpointRecord,
     ReviewRecord,
     RepositorySnapshotRecord,
+    UncertainExecutionDispositionRecord,
     UncertaintyReconciliationRecord,
     UsagePoolRecord,
     WorkflowRecord,
@@ -114,6 +115,40 @@ class RecoveryActionAuthority(Protocol):
         task_id: str | None = None,
     ) -> tuple[ApprovalRecord, str | None]: ...
 
+    def issue_uncertain_execution_disposition_receipt(
+        self,
+        action: ProposedAction,
+        *,
+        approval_id: str,
+        authority_attempt_id: str,
+        pass_b_attempt_id: str,
+        assignment_id: str,
+        execution_charter_id: str,
+        execution_charter_revision: int,
+        observation_digest: str,
+    ) -> dict[str, object]: ...
+
+
+class UncertainExecutionObserver(Protocol):
+    def __call__(self, authority_attempt_id: str) -> dict[str, object]: ...
+
+
+class UncertainExecutionFinalizer(Protocol):
+    def __call__(
+        self,
+        authority_attempt_id: str,
+        executive_recovery_receipt: dict[str, object],
+    ) -> dict[str, object]: ...
+
+
+class CompletedExecutionReconciler(Protocol):
+    def __call__(
+        self,
+        assignment: AssignmentRecord,
+        attempt: AttemptRecord,
+        workspace: WorkspaceReservationRecord,
+    ) -> AdapterResult | None: ...
+
 
 class OrchestrationService:
     def __init__(
@@ -126,6 +161,11 @@ class OrchestrationService:
         usage_reset_verifier: UsageResetVerifier | None = None,
         project_status: ProjectStatusReader | None = None,
         recovery_action_authority: RecoveryActionAuthority | None = None,
+        uncertain_execution_observer: UncertainExecutionObserver | None = None,
+        uncertain_execution_finalizer: UncertainExecutionFinalizer | None = None,
+        completed_execution_reconciler: (
+            CompletedExecutionReconciler | None
+        ) = None,
     ) -> None:
         self.repository = repository
         self.clock = clock or (lambda: datetime.now(UTC))
@@ -141,7 +181,64 @@ class OrchestrationService:
         )
         self.project_status = project_status
         self.recovery_action_authority = recovery_action_authority
+        self.uncertain_execution_observer = uncertain_execution_observer
+        self.uncertain_execution_finalizer = uncertain_execution_finalizer
+        self.completed_execution_reconciler = completed_execution_reconciler
         self.adapters: dict[str, ProviderAdapter] = {}
+
+    def reconcile_completed_uncertain_execution(
+        self, assignment_id: str
+    ) -> EvidenceBundleRecord | None:
+        """Accept only an exact signed completion missed during restart."""
+
+        assignment = self.repository.get(AssignmentRecord, assignment_id)
+        attempts = [
+            item
+            for item in self.repository.list(AttemptRecord)
+            if item.assignment_id == assignment.assignment_id
+            and item.state == AttemptState.UNCERTAIN
+            and item.uncertainty_kind
+            == "EXTERNAL_EXECUTION_OUTCOME_AMBIGUOUS"
+        ]
+        workspaces = [
+            item
+            for item in self.repository.list(
+                WorkspaceReservationRecord,
+                project_id=assignment.project_id,
+            )
+            if item.assignment_id == assignment.assignment_id
+            and item.state == ReservationState.UNCERTAIN
+        ]
+        if (
+            assignment.state != AssignmentState.UNCERTAIN
+            or len(attempts) != 1
+            or len(workspaces) != 1
+            or workspaces[0].workspace_reservation_id
+            != attempts[0].workspace_reservation_id
+            or not attempts[0].session_slot_claimed
+        ):
+            raise PermissionError(
+                "assignment has no exact uncertain external execution"
+            )
+        reconciler = self.completed_execution_reconciler
+        if reconciler is None:
+            raise PermissionError(
+                "authenticated completion reconciliation is unavailable"
+            )
+        result = reconciler(assignment, attempts[0], workspaces[0])
+        if result is None:
+            return None
+        if result.external_execution_id != attempts[0].authority_attempt_id:
+            raise PermissionError(
+                "recovered completion identity does not match the attempt"
+            )
+        evidence = self._evidence(assignment, attempts[0], result)
+        self.repository.reconcile_completed_attempt(
+            attempts[0].attempt_id,
+            evidence,
+            self._now(),
+        )
+        return evidence
 
     def register_provider(
         self,
@@ -2005,15 +2102,87 @@ class OrchestrationService:
                     updated_at=self._now(),
                 )
             except BaseException as error:
+                observation: dict[str, Any] | None = None
+                if type(error) is PermissionError:
+                    try:
+                        candidate = self.authority_reservation.observe(prepared)
+                        if (
+                            set(candidate)
+                            == {
+                                "found",
+                                "record",
+                                "service_key_id",
+                                "service_key_version",
+                                "client_sid",
+                            }
+                            and candidate.get("found") is False
+                            and candidate.get("record") is None
+                            and isinstance(
+                                candidate.get("service_key_id"), str
+                            )
+                            and bool(candidate.get("service_key_id"))
+                            and isinstance(
+                                candidate.get("service_key_version"), int
+                            )
+                            and int(candidate["service_key_version"]) >= 1
+                            and isinstance(candidate.get("client_sid"), str)
+                            and str(candidate["client_sid"]).startswith(
+                                "S-1-"
+                            )
+                        ):
+                            observation = candidate
+                    except (OSError, PermissionError, RuntimeError, ValueError):
+                        observation = None
                 try:
+                    uncertain_at = self._now()
                     self.repository.mark_authority_reservation_uncertain(
                         attempt_id,
                         detail=(
                             "Authority reservation or authorization outcome "
                             f"is uncertain: {type(error).__name__}"
                         ),
-                        updated_at=self._now(),
+                        updated_at=uncertain_at,
                     )
+                    if observation is not None:
+                        service_key_id = str(observation["service_key_id"])
+                        service_key_version = int(
+                            observation["service_key_version"]
+                        )
+                        client_sid = str(observation["client_sid"])
+                        observation_digest = hashlib.sha256(
+                            json.dumps(
+                                {
+                                    "outcome": "DEFINITIVE_REJECTION",
+                                    "authority_attempt_id": (
+                                        prepared.authority_attempt_id
+                                    ),
+                                    "reservation_plan_digest": (
+                                        prepared.reservation_plan_digest
+                                    ),
+                                    "found": False,
+                                    "record": None,
+                                    "service_key_id": service_key_id,
+                                    "service_key_version": (
+                                        service_key_version
+                                    ),
+                                    "client_sid": client_sid,
+                                },
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        self.repository.reconcile_absent_authority_reservation(
+                            assignment.assignment_id,
+                            attempt_id=attempt_id,
+                            authority_attempt_id=(
+                                prepared.authority_attempt_id
+                            ),
+                            observation_digest=observation_digest,
+                            service_key_id=service_key_id,
+                            service_key_version=service_key_version,
+                            client_sid=client_sid,
+                            reconciled_at=self._now(),
+                        )
                 except (KeyError, PermissionError):
                     pass
                 raise
@@ -2533,6 +2702,474 @@ class OrchestrationService:
             effect_classes=("LOCAL_WRITE",),
             repository=None,
             branch=None,
+        )
+
+    def uncertain_execution_disposition_observation(
+        self, assignment_id: str
+    ) -> dict[str, object]:
+        """Return the exact durable facts a Founder must disposition."""
+
+        assignment = self.repository.get(AssignmentRecord, assignment_id)
+        attempts = [
+            item
+            for item in self.repository.list(AttemptRecord)
+            if item.assignment_id == assignment.assignment_id
+            and item.state == AttemptState.UNCERTAIN
+        ]
+        workspaces = [
+            item
+            for item in self.repository.list(
+                WorkspaceReservationRecord,
+                project_id=assignment.project_id,
+            )
+            if item.assignment_id == assignment.assignment_id
+            and item.state == ReservationState.UNCERTAIN
+        ]
+        usage = [
+            item
+            for item in self.repository.usage_reservations(
+                assignment.assignment_id
+            )
+            if item["state"] == "ACTIVE"
+        ]
+        writes = sorted(
+            (
+                item
+                for item in self.repository.list(WriteReservationRecord)
+                if item.assignment_id == assignment.assignment_id
+                and item.state == ReservationState.UNCERTAIN
+            ),
+            key=lambda item: item.write_reservation_id,
+        )
+        if (
+            assignment.state != AssignmentState.UNCERTAIN
+            or len(attempts) != 1
+            or attempts[0].uncertainty_kind
+            != "EXTERNAL_EXECUTION_OUTCOME_AMBIGUOUS"
+            or not attempts[0].session_slot_claimed
+            or len(workspaces) != 1
+            or workspaces[0].workspace_reservation_id
+            != attempts[0].workspace_reservation_id
+            or len(usage) != 1
+            or attempts[0].usage_reservation_id
+            != usage[0]["reservation_id"]
+        ):
+            raise PermissionError(
+                "assignment has no exact uncertain external execution"
+            )
+        attempt = attempts[0]
+        observer = self.uncertain_execution_observer
+        if observer is None:
+            raise PermissionError(
+                "authenticated provider inactivity observation is unavailable"
+            )
+        inactivity = observer(attempt.authority_attempt_id)
+        if (
+            inactivity.get("authority_attempt_id")
+            != attempt.authority_attempt_id
+            or inactivity.get("disposition_readiness")
+            != "EXACT_ATTEMPT_INACTIVE"
+            or inactivity.get("launch_state")
+            != "ABSENT_FROM_ACTIVE_OR_UNCERTAIN_JOURNAL"
+        ):
+            raise PermissionError(
+                "exact provider execution inactivity is not proven"
+            )
+        return {
+            "schema_version": 1,
+            "project_id": assignment.project_id,
+            "charter_id": assignment.charter_id,
+            "charter_revision": assignment.charter_revision,
+            "workflow_id": assignment.workflow_id,
+            "work_item_id": assignment.work_item_id,
+            "assignment_id": assignment.assignment_id,
+            "attempt_id": attempt.attempt_id,
+            "provider_id": assignment.provider_id,
+            "account_id": assignment.account_id,
+            "session_id": assignment.session_id,
+            "model_id": assignment.model_id,
+            "authority_attempt_id": attempt.authority_attempt_id,
+            "launch_token": attempt.launch_token,
+            "external_execution_id": attempt.external_execution_id,
+            "workspace_reservation_id": (
+                workspaces[0].workspace_reservation_id
+            ),
+            "canonical_workspace_path": workspaces[0].canonical_path,
+            "write_reservations": [
+                {
+                    "write_reservation_id": item.write_reservation_id,
+                    "workspace_reservation_id": item.workspace_reservation_id,
+                    "scope": list(item.scope),
+                    "scope_keys": list(item.scope_keys),
+                    "record_digest": hashlib.sha256(
+                        json.dumps(
+                            item.to_dict(),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                }
+                for item in writes
+            ],
+            "inactivity_observation": inactivity,
+            "inactivity_observation_digest": hashlib.sha256(
+                json.dumps(
+                    inactivity, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest(),
+            "usage_reservation_id": str(usage[0]["reservation_id"]),
+            "usage_pool_id": str(usage[0]["pool_id"]),
+            "usage_amount": float(usage[0]["amount"]),
+            "uncertainty_kind": attempt.uncertainty_kind,
+            "possible_external_effect": True,
+            "result_accepted": False,
+            "retry_authorized": False,
+            "usage_reservation_disposition": "CONSUME_UPPER_BOUND",
+        }
+
+    def uncertain_execution_disposition_action(
+        self,
+        assignment_id: str,
+        *,
+        observation_digest: str,
+        observation: dict[str, object] | None = None,
+        require_observation_digest_match: bool = True,
+    ) -> ProposedAction:
+        if observation is None:
+            observation = self.uncertain_execution_disposition_observation(
+                assignment_id
+            )
+        expected_digest = hashlib.sha256(
+            json.dumps(
+                observation, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        if require_observation_digest_match and observation_digest != expected_digest:
+            raise PermissionError(
+                "uncertain execution observation changed before approval"
+            )
+        assignment = self.repository.get(AssignmentRecord, assignment_id)
+        status = self.project_status(assignment.project_id)
+        project = dict(status.get("project_summary") or {})
+        active_charter = dict(status.get("active_charter") or {})
+        approval_charter_id = active_charter.get("charter_id")
+        approval_revision = active_charter.get("revision")
+        if (
+            project.get("state") != "ACTIVE"
+            or not isinstance(approval_charter_id, str)
+            or not approval_charter_id
+            or not isinstance(approval_revision, int)
+            or approval_revision < assignment.charter_revision
+            or active_charter.get("status") != "ACTIVE"
+        ):
+            raise PermissionError(
+                "uncertain execution disposition requires the current charter"
+            )
+        return ProposedAction(
+            action_id=(
+                f"pass-b-dispose-uncertain-execution:"
+                f"{observation['attempt_id']}:{observation_digest}"
+            ),
+            project_id=assignment.project_id,
+            charter_revision=approval_revision,
+            category="REPAIR",
+            target_resource=(
+                "keeper-pass-b-uncertain-execution:"
+                f"{assignment.project_id}:{assignment.charter_id}:"
+                f"{assignment.charter_revision}:{assignment.workflow_id}:"
+                f"{assignment.work_item_id}:{assignment.assignment_id}:"
+                f"{observation['attempt_id']}:"
+                f"{observation['authority_attempt_id']}:"
+                f"{observation_digest}:"
+                f"{_local_recovery_observation_digest(observation)}"
+            ),
+            provider=assignment.provider_id,
+            tool="keeper-founder-dispose-uncertain-execution",
+            workspace=str(observation["canonical_workspace_path"]),
+            scope=(),
+            cost=0.0,
+            reversible=False,
+            risk="HIGH",
+            data_classification="INTERNAL",
+            external_side_effect=False,
+            objective=(
+                "Apply one exact Founder disposition to abandon a stale "
+                "uncertain execution locally while preserving that an external "
+                "effect may have occurred, accepting no result, consuming the "
+                "reserved usage upper bound, and authorizing no retry."
+            ),
+            currency=None,
+            publication=False,
+            deployment=False,
+            spending=False,
+            git_mutation=None,
+            security_boundary_impact=True,
+            trusted_source="DURABLE_WORKFLOW_TASK",
+            effect_classes=("LOCAL_WRITE",),
+            repository=None,
+            branch=None,
+        )
+
+    def apply_uncertain_execution_disposition(
+        self,
+        assignment_id: str,
+        *,
+        observation_digest: str,
+        approval_id: str,
+    ) -> AttemptRecord:
+        authority = self.recovery_action_authority
+        if authority is None:
+            raise PermissionError(
+                "Founder recovery action authority is unavailable"
+            )
+        observation = self.uncertain_execution_disposition_observation(
+            assignment_id
+        )
+        action = self.uncertain_execution_disposition_action(
+            assignment_id,
+            observation_digest=observation_digest,
+            observation=observation,
+            require_observation_digest_match=False,
+        )
+        assignment = self.repository.get(AssignmentRecord, assignment_id)
+        status = self.project_status(assignment.project_id)
+        active_charter = dict(status.get("active_charter") or {})
+        try:
+            approval, budget_reservation_id = authority.reserve_action_authority(
+                action,
+                approval_id=approval_id,
+                task_id=str(observation["attempt_id"]),
+            )
+        except PermissionError:
+            # A prior call may have consumed the one-time approval and durably
+            # terminalized Authority before local cleanup was interrupted. The
+            # signed Executive receipt below is the only accepted retry proof.
+            approval = None
+            budget_reservation_id = None
+        if approval is not None and (
+            approval.approval_id != approval_id
+            or approval.project_id != assignment.project_id
+            or approval.charter_id != active_charter.get("charter_id")
+            or approval.charter_revision != active_charter.get("revision")
+            or approval.kind != "ONE_TIME"
+            or approval.action_category != "REPAIR"
+            or approval.consumed_at is None
+            or budget_reservation_id is not None
+        ):
+            raise PermissionError(
+                "Founder uncertain execution disposition receipt is invalid"
+            )
+        finalizer = self.uncertain_execution_finalizer
+        if finalizer is None:
+            raise PermissionError(
+                "KeeperAuthority recovery finalization is unavailable"
+            )
+        executive_receipt = authority.issue_uncertain_execution_disposition_receipt(
+            action,
+            approval_id=approval_id,
+            authority_attempt_id=str(observation["authority_attempt_id"]),
+            pass_b_attempt_id=str(observation["attempt_id"]),
+            assignment_id=assignment.assignment_id,
+            execution_charter_id=assignment.charter_id,
+            execution_charter_revision=assignment.charter_revision,
+            observation_digest=observation_digest,
+        )
+        approved_inactivity = executive_receipt.get(
+            "approved_inactivity_observation"
+        )
+        current_inactivity = observation.get("inactivity_observation")
+        inactivity_identity_fields = (
+            "authority_attempt_id",
+            "launch_id",
+            "host_id",
+            "enrollment_id",
+            "enrollment_generation",
+            "launch_state",
+            "disposition_readiness",
+        )
+        approved_to_current_valid = (
+            isinstance(approved_inactivity, dict)
+            and isinstance(current_inactivity, dict)
+            and all(
+                approved_inactivity.get(name) == current_inactivity.get(name)
+                for name in inactivity_identity_fields
+            )
+            and isinstance(
+                approved_inactivity.get("recovery_barrier_generation"), int
+            )
+            and not isinstance(
+                approved_inactivity.get("recovery_barrier_generation"), bool
+            )
+            and isinstance(
+                current_inactivity.get("recovery_barrier_generation"), int
+            )
+            and not isinstance(
+                current_inactivity.get("recovery_barrier_generation"), bool
+            )
+            and int(current_inactivity["recovery_barrier_generation"])
+            >= int(approved_inactivity["recovery_barrier_generation"])
+        )
+        if (
+            executive_receipt.get("approval_id") != approval_id
+            or executive_receipt.get("project_id") != assignment.project_id
+            or executive_receipt.get("charter_id")
+            != active_charter.get("charter_id")
+            or executive_receipt.get("charter_revision")
+            != active_charter.get("revision")
+            or executive_receipt.get("execution_charter_id")
+            != assignment.charter_id
+            or executive_receipt.get("execution_charter_revision")
+            != assignment.charter_revision
+            or not approved_to_current_valid
+        ):
+            raise PermissionError(
+                "signed Executive recovery receipt is invalid"
+            )
+        authority_disposition = finalizer(
+            str(observation["authority_attempt_id"]), executive_receipt
+        )
+        final_inactivity = authority_disposition.get("inactivity_observation")
+        observed_inactivity = observation.get("inactivity_observation")
+        production_final_proof_valid = (
+            isinstance(final_inactivity, dict)
+            and isinstance(observed_inactivity, dict)
+            and all(
+                final_inactivity.get(name) == observed_inactivity.get(name)
+                for name in inactivity_identity_fields
+            )
+            and isinstance(final_inactivity.get("recovery_barrier_generation"), int)
+            and not isinstance(final_inactivity.get("recovery_barrier_generation"), bool)
+            and isinstance(observed_inactivity.get("recovery_barrier_generation"), int)
+            and not isinstance(observed_inactivity.get("recovery_barrier_generation"), bool)
+            and int(final_inactivity["recovery_barrier_generation"])
+            >= int(observed_inactivity["recovery_barrier_generation"])
+            and authority_disposition.get("inactivity_observation_digest")
+            == hashlib.sha256(
+                json.dumps(
+                    final_inactivity, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+        if (
+            authority_disposition.get("authority_attempt_id")
+            != observation["authority_attempt_id"]
+            or authority_disposition.get("project_id") != assignment.project_id
+            or authority_disposition.get("charter_id") != assignment.charter_id
+            or authority_disposition.get("charter_revision")
+            != assignment.charter_revision
+            or authority_disposition.get("approval_charter_id")
+            != active_charter.get("charter_id")
+            or authority_disposition.get("approval_charter_revision")
+            != active_charter.get("revision")
+            or authority_disposition.get("assignment_id")
+            != assignment.assignment_id
+            or authority_disposition.get("pass_b_attempt_id")
+            != observation["attempt_id"]
+            or authority_disposition.get("action_id") != action.action_id
+            or authority_disposition.get("action_digest")
+            != executive_receipt.get("action_digest")
+            or authority_disposition.get("approval_id") != approval_id
+            or authority_disposition.get("observation_digest")
+            != observation_digest
+            or (
+                authority_disposition.get("composition") != "TEST_AUTHORITY"
+                and not production_final_proof_valid
+            )
+            or authority_disposition.get("terminal_disposition")
+            != "FOUNDER_ABANDONED_UNCERTAIN_EXTERNAL_EXECUTION"
+            or authority_disposition.get("possible_external_effect_preserved")
+            is not True
+            or authority_disposition.get("result_accepted") is not False
+            or authority_disposition.get("retry_authorized") is not False
+        ):
+            raise PermissionError(
+                "KeeperAuthority recovery disposition binding is invalid"
+            )
+        now = self._now()
+        action_digest = hashlib.sha256(
+            json.dumps(
+                action.to_dict(), sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        return self.repository.apply_uncertain_execution_disposition(
+            UncertainExecutionDispositionRecord(
+                disposition_id=(
+                    "uncertain-execution-disposition:"
+                    f"{observation['attempt_id']}"
+                ),
+                project_id=assignment.project_id,
+                charter_id=assignment.charter_id,
+                charter_revision=assignment.charter_revision,
+                approval_charter_id=str(active_charter["charter_id"]),
+                approval_charter_revision=int(active_charter["revision"]),
+                workflow_id=assignment.workflow_id,
+                work_item_id=assignment.work_item_id,
+                assignment_id=assignment.assignment_id,
+                attempt_id=str(observation["attempt_id"]),
+                provider_id=assignment.provider_id,
+                account_id=assignment.account_id,
+                session_id=assignment.session_id,
+                model_id=assignment.model_id,
+                authority_attempt_id=str(
+                    observation["authority_attempt_id"]
+                ),
+                launch_token=str(observation["launch_token"]),
+                external_execution_id=cast(
+                    str | None, observation["external_execution_id"]
+                ),
+                workspace_reservation_ids=(
+                    str(observation["workspace_reservation_id"]),
+                ),
+                write_reservation_ids=tuple(
+                    str(item["write_reservation_id"])
+                    for item in cast(
+                        list[dict[str, object]], observation["write_reservations"]
+                    )
+                ),
+                write_reservation_digests=tuple(
+                    str(item["record_digest"])
+                    for item in cast(
+                        list[dict[str, object]], observation["write_reservations"]
+                    )
+                ),
+                usage_reservation_id=str(
+                    observation["usage_reservation_id"]
+                ),
+                usage_pool_id=str(observation["usage_pool_id"]),
+                usage_amount=float(observation["usage_amount"]),
+                resolution=(
+                    "FOUNDER_ABANDONED_UNCERTAIN_EXTERNAL_EXECUTION"
+                ),
+                observation_digest=observation_digest,
+                action_id=action.action_id,
+                action_digest=action_digest,
+                approval_id=str(executive_receipt["approval_id"]),
+                approval_event_id=str(
+                    executive_receipt["approval_event_id"]
+                ),
+                founder_identity=str(executive_receipt["founder_identity"]),
+                possible_external_effect_preserved=True,
+                inactivity_observation=cast(
+                    dict[str, object], observation["inactivity_observation"]
+                ),
+                inactivity_observation_digest=str(
+                    observation["inactivity_observation_digest"]
+                ),
+                authority_disposition=authority_disposition,
+                authority_disposition_digest=hashlib.sha256(
+                    json.dumps(
+                        authority_disposition,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+                usage_reservation_consumed=True,
+                state="APPLIED",
+                disposed_at=now,
+                created_at=now,
+                updated_at=now,
+                revision=1,
+            )
         )
 
     def reconcile_uncertain_cancellation(
@@ -3369,6 +4006,19 @@ def authority_envelope_digest_for_status(charter: dict[str, Any]) -> str:
 def authority_envelope_digest(value: dict[str, object]) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _local_recovery_observation_digest(
+    observation: dict[str, object],
+) -> str:
+    local = dict(observation)
+    local.pop("inactivity_observation", None)
+    local.pop("inactivity_observation_digest", None)
+    return hashlib.sha256(
+        json.dumps(local, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"
         )
     ).hexdigest()

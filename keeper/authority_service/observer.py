@@ -59,6 +59,7 @@ from keeper.authority_service.windows_signature import (
 )
 from keeper.policies import filtered_environment
 from keeper.providers.adapters import (
+    ProviderCapabilities,
     authority_provider_output_schema,
     create_provider_registration,
     validate_value_against_schema,
@@ -729,10 +730,38 @@ class ServiceProviderObserver:
                 expected_account_plan_type=expected_account_plan_type,
             )
         with impersonate_token(self._client_token()):
+            capabilities: ProviderCapabilities | None = None
+            role_eligibility: list[str] | None = None
+            if provider_id == "gemini":
+                capabilities = ProviderCapabilities(
+                    author=False,
+                    reviewer=True,
+                    repairer=False,
+                    structured_output=True,
+                    streaming=False,
+                    cancellation=True,
+                    usage_reporting=False,
+                    local_only=False,
+                )
+                role_eligibility = ["post_repair_reviewer", "reviewer"]
+            elif provider_id == "qwen":
+                capabilities = ProviderCapabilities(
+                    author=False,
+                    reviewer=True,
+                    repairer=False,
+                    structured_output=True,
+                    streaming=False,
+                    cancellation=True,
+                    usage_reporting=False,
+                    local_only=True,
+                )
+                role_eligibility = ["post_repair_reviewer", "reviewer"]
             registration = create_provider_registration(
                 provider_id,
                 executable,
                 authorized_by=client_sid,
+                capabilities=capabilities,
+                role_eligibility=role_eligibility,
                 executive_capabilities=executive_capabilities,
                 project_types=project_types,
                 effort_levels=effort_levels,
@@ -1186,11 +1215,44 @@ class ServiceProviderObserver:
                     "-p",
                     prompt,
                 ]
+        elif provider_id == "gemini":
+            output_schema = provider_output_schema()
+            governed_prompt = (
+                "Return only one JSON object that validates against this JSON Schema: "
+                + json.dumps(output_schema, separators=(",", ":"))
+                + "\n\nTask:\n"
+                + prompt
+            )
+            command = [
+                *base_command,
+                "--sandbox",
+                "--approval-mode=plan",
+                "--model",
+                "gemini-2.5-pro",
+                "--output-format",
+                "json",
+                "--prompt",
+                governed_prompt,
+            ]
+        elif provider_id == "qwen":
+            output_schema = provider_output_schema()
+            governed_prompt = (
+                "Return only one JSON object that validates against this JSON Schema: "
+                + json.dumps(output_schema, separators=(",", ":"))
+                + "\n\nTask:\n"
+                + prompt
+            )
+            command = [
+                *base_command,
+                "run",
+                "qwen3-coder:30b",
+                governed_prompt,
+            ]
         else:
             raise PermissionError("provider execution adapter is unsupported")
         process_stdout_path = (
             stdout_path.with_suffix(".envelope.json")
-            if provider_id == "claude"
+            if provider_id in {"claude", "gemini"}
             else (
                 stdout_path.with_suffix(".events.jsonl")
                 if registration.get("registration_schema_version")
@@ -1408,13 +1470,15 @@ class ServiceProviderObserver:
             )
             if failure_classification != "COMPLETED" and exit_status == 0:
                 exit_status = 65
-        if provider_id == "claude" and exit_status == 0:
+        if provider_id in {"claude", "gemini"} and exit_status == 0:
             try:
                 envelope = json.loads(
                     process_stdout_path.read_text(encoding="utf-8")
                 )
-                domain = envelope.get(
-                    "structured_output", envelope.get("result")
+                domain = (
+                    envelope.get("response")
+                    if provider_id == "gemini"
+                    else envelope.get("structured_output", envelope.get("result"))
                 )
                 if isinstance(domain, str):
                     domain = json.loads(domain)
@@ -1430,6 +1494,19 @@ class ServiceProviderObserver:
                 stderr_path.write_text(
                     f"invalid Claude result envelope: {error}",
                     encoding="utf-8",
+                )
+                exit_status = 65
+        if provider_id == "qwen" and exit_status == 0:
+            try:
+                domain = json.loads(stdout_path.read_text(encoding="utf-8"))
+                if not isinstance(domain, dict) or not validate_value_against_schema(
+                    domain, provider_output_schema()
+                ):
+                    raise ValueError("Qwen response does not match the output schema")
+            except (json.JSONDecodeError, OSError, ValueError) as error:
+                stdout_path.write_text("", encoding="utf-8")
+                stderr_path.write_text(
+                    f"invalid Qwen structured result: {error}", encoding="utf-8"
                 )
                 exit_status = 65
         return ExecutionObservation(

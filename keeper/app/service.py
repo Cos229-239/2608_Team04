@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -34,6 +36,44 @@ from keeper.version import VERSION
 authority_client_factory: Callable[[Path], AuthorityServiceClient] = (
     lambda _data_directory: AuthorityServiceClient()
 )
+
+
+def _reject_reparse_components(path: Path) -> None:
+    """Reject symlinks and Windows junctions anywhere in an evidence path."""
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if not os.path.lexists(current):
+            continue
+        try:
+            metadata = os.lstat(current)
+        except OSError as error:
+            raise PermissionError(
+                "evidence path identity cannot be safely inspected"
+            ) from error
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        if stat.S_ISLNK(metadata.st_mode) or attributes & 0x400:
+            raise PermissionError("evidence path cannot contain a reparse point")
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    """Compare local path spellings without touching an untrusted target."""
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+        os.path.abspath(right)
+    )
+
+
+def _validated_evidence_child(root: Path, path: Path, label: str) -> Path:
+    """Return one evidence child only when its whole path remains trustworthy."""
+    _reject_reparse_components(path)
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise PermissionError(f"{label} identity cannot be safely inspected") from error
+    if not resolved.is_relative_to(root):
+        raise PermissionError(f"{label} escapes the run root")
+    return resolved
 
 
 class KeeperApplication:
@@ -145,7 +185,7 @@ class KeeperApplication:
         qualifies, launches, or retries a provider.
         """
 
-        if provider_id not in {"codex", "claude"}:
+        if provider_id not in {"codex", "claude", "gemini", "qwen"}:
             raise PermissionError("provider projection identity is unsupported")
         if not registration_id.strip() or not qualification_id.strip():
             raise ValueError(
@@ -212,9 +252,49 @@ class KeeperApplication:
         existing_registrations = self.provider_registrations()
         existing_registration = existing_registrations.get(provider_id)
         if existing_registration is not None and existing_registration != registration:
-            raise PermissionError(
-                "local provider projection conflicts with another registration"
+            existing_registration_id = existing_registration.get(
+                "trusted_registration_id"
             )
+            existing_authority_result = (
+                self.authority.query_state(
+                    "registrations", existing_registration_id
+                )
+                if isinstance(existing_registration_id, str)
+                else {}
+            )
+            existing_authority_value = existing_authority_result.get("record")
+            existing_authority_registration = (
+                dict(existing_authority_value)
+                if existing_authority_result.get("found")
+                and isinstance(existing_authority_value, dict)
+                else None
+            )
+            existing_authority_state = (
+                existing_authority_registration.pop("service_state", None)
+                if existing_authority_registration is not None
+                else None
+            )
+            existing_executable = (
+                existing_authority_registration.get("canonical_executable_path")
+                if existing_authority_registration is not None
+                else None
+            )
+            if (
+                existing_authority_state != "REVOKED"
+                or existing_authority_registration is None
+                or existing_authority_registration.get("registration_lifecycle")
+                != "REVOKED"
+                or existing_authority_registration.get("logical_provider_id")
+                != provider_id
+                or existing_authority_registration.get("trusted_registration_id")
+                != existing_registration_id
+                or not isinstance(existing_executable, str)
+                or Path(existing_executable).resolve()
+                != Path(str(registration["canonical_executable_path"])).resolve()
+            ):
+                raise PermissionError(
+                    "local provider projection conflicts with another registration"
+                )
 
         artifacts_to_insert: list[tuple[str, dict[str, Any]]] = []
         for artifact in (start, evidence):
@@ -307,7 +387,10 @@ class KeeperApplication:
         authentication_policy: dict[str, Any] | None = None,
         usage_policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if provider_id not in {"codex", "claude"} or not authorizer.strip():
+        if (
+            provider_id not in {"codex", "claude", "gemini", "qwen"}
+            or not authorizer.strip()
+        ):
             raise PermissionError(
                 "provider registration requires a supported identity and authorizer"
             )
@@ -471,7 +554,8 @@ class KeeperApplication:
             "strongest",
             "codex",
             "claude",
-            "ollama",
+            "gemini",
+            "qwen",
         }
         if selected_policy not in allowed_policies:
             raise ValueError(f"unsupported provider policy: {selected_policy}")
@@ -503,6 +587,27 @@ class KeeperApplication:
             "completion_criteria": list(values.get("completion_criteria", [])),
             "delegation_mode": bool(values.get("delegation_mode", False)),
             "repository": str(repository_path),
+            "keeper_project_id": (
+                str(values["keeper_project_id"])
+                if values.get("keeper_project_id")
+                else None
+            ),
+            "keeper_charter_id": (
+                str(values["keeper_charter_id"])
+                if values.get("keeper_charter_id")
+                else None
+            ),
+            "keeper_charter_revision": values.get("keeper_charter_revision"),
+            "keeper_founder_approval_record_id": (
+                str(values["keeper_founder_approval_record_id"])
+                if values.get("keeper_founder_approval_record_id")
+                else None
+            ),
+            "keeper_founder_approval_identity": (
+                str(values["keeper_founder_approval_identity"])
+                if values.get("keeper_founder_approval_identity")
+                else None
+            ),
             "provider_policy": selected_policy,
             "is_demo": is_demo,
             "mock_scenario": str(values.get("mock_scenario", "repair")),
@@ -560,12 +665,22 @@ class KeeperApplication:
         evidence = run.get("evidence_root")
         latest = ""
         if isinstance(evidence, str):
-            logs = sorted(Path(evidence).glob(".ai-workflow/runs/*/*.log"))
-            if logs:
-                try:
-                    latest = redact_text(logs[-1].read_text(encoding="utf-8"), 20_000)
-                except OSError:
-                    latest = ""
+            root = self._validated_evidence_root(
+                run_id, run, require_exists=False
+            )
+            if os.path.lexists(root):
+                root = self._validated_evidence_root(run_id, run)
+                logs = sorted(root.glob(".ai-workflow/runs/*/*.log"))
+                if logs:
+                    try:
+                        latest_log = _validated_evidence_child(
+                            root, logs[-1], "log evidence"
+                        )
+                        latest = redact_text(
+                            latest_log.read_text(encoding="utf-8"), 20_000
+                        )
+                    except OSError:
+                        latest = ""
         verification = [
             item
             for item in self.store.list("verification_records")
@@ -587,16 +702,7 @@ class KeeperApplication:
 
     def evidence_details(self, run_id: str, category: str) -> dict[str, Any]:
         run = self.run_status(run_id)
-        root_value = run.get("evidence_root")
-        if not isinstance(root_value, str):
-            raise ValueError("run has no evidence root")
-        raw_root = Path(root_value)
-        if raw_root.is_symlink():
-            raise PermissionError("evidence root cannot be a symbolic link")
-        root = raw_root.resolve()
-        allowed = (self.data_directory / "evidence").resolve()
-        if not root.is_relative_to(allowed):
-            raise PermissionError("evidence path is outside Keeper storage")
+        root = self._validated_evidence_root(run_id, run)
         provider_records: list[dict[str, Any]] = []
         for path in sorted(root.glob(".ai-workflow/runs/*/run.json")):
             resolved = path.resolve()
@@ -735,10 +841,132 @@ class KeeperApplication:
             atomic_write_json(task_path, domain_task)
 
     def start_task(self, task_id: str) -> dict[str, Any]:
-        return self.workflow.start(task_id)
+        task = self.store.get("tasks", task_id)
+        if task is None:
+            raise LookupError("task not found")
+        executive_generation = self._validate_task_authority_binding(task)
+        if any(item.get("task_id") == task_id for item in self.store.list("runs")):
+            raise PermissionError(
+                "task was already launched; use its explicit run recovery controls"
+            )
+        task_digest = self.store.claim_task_launch(
+            task_id,
+            task,
+            executive_generation,
+            {
+                "kind": "task_launch_claim",
+                "task_id": task_id,
+                "claimed_at": _now(),
+                "keeper_project_id": task.get("keeper_project_id"),
+                "keeper_charter_id": task.get("keeper_charter_id"),
+                "keeper_charter_revision": task.get("keeper_charter_revision"),
+                "keeper_founder_approval_record_id": task.get(
+                    "keeper_founder_approval_record_id"
+                ),
+                "keeper_founder_approval_identity": task.get(
+                    "keeper_founder_approval_identity"
+                ),
+            },
+        )
+        return self.workflow.start(
+            task_id, validated_task=task, task_digest=task_digest
+        )
+
+    def _validate_task_authority_binding(
+        self, task: dict[str, Any]
+    ) -> int | None:
+        """Revalidate an exact Pass B charter binding at the execution boundary."""
+        project_id = task.get("keeper_project_id")
+        bound_fields = (
+            "keeper_charter_id",
+            "keeper_charter_revision",
+            "keeper_founder_approval_record_id",
+            "keeper_founder_approval_identity",
+        )
+        if project_id is None:
+            if any(task.get(field) is not None for field in bound_fields):
+                raise PermissionError("task has an incomplete Keeper charter binding")
+            return None
+        if not isinstance(project_id, str) or not project_id:
+            raise PermissionError("task Keeper project binding is invalid")
+        from keeper.executive.service import KeeperExecutive
+
+        status: dict[str, Any] | None = None
+        generation_after: int | None = None
+        for _attempt in range(2):
+            generation_before = self.store.executive_generation()
+            try:
+                candidate = KeeperExecutive(self.store.path).status(
+                    project_id
+                ).to_dict()
+            except (KeyError, PermissionError, RuntimeError, ValueError) as error:
+                raise PermissionError(
+                    "task Keeper project authority is unavailable"
+                ) from error
+            generation_after = self.store.executive_generation()
+            if generation_before == generation_after:
+                status = candidate
+                break
+        if status is None or generation_after is None:
+            raise PermissionError(
+                "Keeper charter changed while task authority was validated"
+            )
+        charter = status.get("active_charter")
+        if not isinstance(charter, dict):
+            raise PermissionError("task Keeper project has no active charter")
+        expected = {
+            "keeper_charter_id": charter.get("charter_id"),
+            "keeper_charter_revision": charter.get("revision"),
+            "keeper_founder_approval_record_id": charter.get(
+                "founder_approval_record_id"
+            ),
+            "keeper_founder_approval_identity": charter.get(
+                "founder_approval_identity"
+            ),
+        }
+        if (
+            not isinstance(expected["keeper_charter_id"], str)
+            or not expected["keeper_charter_id"]
+            or type(expected["keeper_charter_revision"]) is not int
+            or not isinstance(
+                expected["keeper_founder_approval_record_id"], str
+            )
+            or not expected["keeper_founder_approval_record_id"]
+            or not isinstance(expected["keeper_founder_approval_identity"], str)
+            or not expected["keeper_founder_approval_identity"]
+            or any(task.get(field) != value for field, value in expected.items())
+        ):
+            raise PermissionError(
+                "task is not bound to the current approved Keeper charter"
+            )
+        workspaces = charter.get("workspaces")
+        if not isinstance(workspaces, (list, tuple)) or len(workspaces) != 1:
+            raise PermissionError(
+                "task Keeper charter must authorize exactly one workspace"
+            )
+        try:
+            workspace = Path(str(workspaces[0])).resolve(strict=True)
+            repository = Path(str(task.get("repository", ""))).resolve(strict=True)
+        except OSError as error:
+            raise PermissionError("task Keeper workspace is unavailable") from error
+        registered = any(
+            item.get("protected_original") is True
+            and _same_path(Path(str(item.get("repository", ""))), workspace)
+            for item in self.projects()
+        )
+        if not registered or not _same_path(repository, workspace):
+            raise PermissionError(
+                "task is not bound to its approved protected repository"
+            )
+        return generation_after
 
     def execute_task(self, task_id: str) -> dict[str, Any]:
-        return self.workflow.execute(task_id)
+        run = self.start_task(task_id)
+        self.workflow.wait(str(run["id"]), timeout=120)
+        completed = self.store.get("runs", str(run["id"]))
+        if completed is None:
+            raise LookupError("run not found")
+        return completed
 
     def wait_for_run(self, run_id: str, timeout: float | None = None) -> dict[str, Any]:
         self.workflow.wait(run_id, timeout)
@@ -838,16 +1066,7 @@ class KeeperApplication:
         run = self.store.get("runs", run_id)
         if run is None:
             raise LookupError("run not found")
-        root_value = run.get("evidence_root")
-        if not isinstance(root_value, str):
-            raise ValueError("run has no finalized evidence")
-        raw_root = Path(root_value)
-        if raw_root.is_symlink():
-            raise PermissionError("evidence root cannot be a symbolic link")
-        root = raw_root.resolve()
-        allowed_root = (self.data_directory / "evidence").resolve()
-        if not root.is_relative_to(allowed_root):
-            raise PermissionError("evidence path is outside Keeper storage")
+        root = self._validated_evidence_root(run_id, run)
         choices = {
             "folder": root,
             "markdown": root / "final-report.md",
@@ -856,6 +1075,52 @@ class KeeperApplication:
         if kind not in choices or not choices[kind].exists():
             raise ValueError("requested evidence target is unavailable")
         return contained_path(root, choices[kind], purpose="evidence target")
+
+    def _validated_evidence_root(
+        self,
+        requested_run_id: str,
+        run: dict[str, Any],
+        *,
+        require_exists: bool = True,
+    ) -> Path:
+        """Resolve evidence only from the exact Keeper-owned run location.
+
+        Demonstration runs use the desktop data directory. Production runs use
+        the authenticated Authority Service client exchange. A stored run may
+        not redirect evidence to another directory, even beneath an otherwise
+        trusted parent.
+        """
+        root_value = run.get("evidence_root")
+        if not isinstance(root_value, str):
+            raise ValueError("run has no finalized evidence")
+        raw_root = Path(root_value)
+        run_id = str(run.get("id", ""))
+        if not requested_run_id or run_id != requested_run_id:
+            raise PermissionError("run evidence identity does not match its durable key")
+
+        execution_value = run.get("authority_execution_root")
+        if isinstance(execution_value, str) and execution_value:
+            execution_root = Path(execution_value).absolute()
+            if not _same_path(execution_root, self.data_directory):
+                diagnostics = self.authority.diagnostics()
+                exchange_value = diagnostics.get("client_exchange_root")
+                if not isinstance(exchange_value, str) or not exchange_value:
+                    raise RuntimeError("Authority Service client exchange is unavailable")
+                current_exchange = Path(exchange_value).absolute()
+                if not _same_path(execution_root, current_exchange):
+                    raise PermissionError("run evidence is not bound to the current Authority Service exchange")
+            expected = execution_root / "evidence" / run_id
+        else:
+            expected = self.data_directory.absolute() / "evidence" / run_id
+
+        if not _same_path(raw_root, expected):
+            raise PermissionError("evidence path is outside Keeper storage")
+        _reject_reparse_components(expected)
+        _reject_reparse_components(raw_root.absolute())
+        root = raw_root.resolve(strict=require_exists)
+        if root != expected.resolve(strict=require_exists):
+            raise PermissionError("evidence path is outside Keeper storage")
+        return root
 
     def open_evidence(self, run_id: str, kind: str = "folder") -> Path:
         target = self.evidence_path(run_id, kind)

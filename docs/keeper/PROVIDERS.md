@@ -1,7 +1,10 @@
 # Provider Setup
 
-Keeper discovers configured full paths and the system path for the Codex command,
-Claude Code command, and Ollama. The deterministic mock provider is built in.
+Keeper's supported provider set is Codex, Claude, Gemini, and Qwen. Keeper
+discovers configured full paths and the system path for the Codex, Claude, and
+Gemini commands. Qwen uses a loopback-only Ollama transport; Ollama itself is not
+presented as a separate provider. The deterministic mock remains an internal
+test and demonstration fixture, not a supported AI provider.
 Executable paths are ordinary settings; authentication remains owned by each
 provider's CLI or operating-system credential mechanism and is never copied into
 Keeper records.
@@ -51,8 +54,14 @@ The Codex adapter uses non-interactive execution, ephemeral session state,
 workspace-write sandboxing, and an output schema. Its command contract was checked
 against current official documentation; authenticated task execution was not
 performed during productization. The Claude adapter uses print mode with JSON and a
-JSON schema; it was not locally exercised. Unavailable providers block required
-roles rather than causing approval. Arguments are passed as arrays, never shell text.
+JSON schema; it was not locally exercised. Gemini has a non-interactive,
+sandboxed, plan-mode JSON envelope adapter and remains blocked until its exact
+executable and session are Authority-qualified. Qwen is pinned in its Authority
+registration and invocation to `qwen3-coder:30b` over loopback and remains
+blocked until its transport is qualified and that exact local model is available.
+Both are currently restricted to independent review roles; they cannot author or
+repair workspace content. Unavailable providers block required roles
+rather than causing approval. Arguments are passed as arrays, never shell text.
 
 ## Retry identity
 

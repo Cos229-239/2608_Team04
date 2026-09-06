@@ -23,12 +23,15 @@ def desktop_pass_b_application(
             from keeper.pass_b.provider_bridge import bridge_qualified_provider
             from keeper.pass_b.usage_authority import ProductionUsageResetVerifier
 
+            exchange_root = authority_exchange_root_from_diagnostics(
+                health_client.diagnostics()
+            )
             result = PassBApplication(
                 data_directory,
                 authority_client=health_client,
                 authority_health_client=health_client,
                 provider_bindings=bindings,
-                authority_exchange_root=data_directory / "authority-exchange",
+                authority_exchange_root=exchange_root,
                 usage_reset_verifier=ProductionUsageResetVerifier.unavailable(),
             )
             for binding in bindings:

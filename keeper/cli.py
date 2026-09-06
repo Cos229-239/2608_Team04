@@ -97,7 +97,7 @@ def build_keeper(root: Path, mock: bool = False) -> Keeper:
         if mock
         else command_provider()
     )
-    ollama = (
+    qwen = (
         MockProvider(
             output={"status": "completed", "files_changed": [], "findings": []},
             provider_name=config.ollama_model,
@@ -111,7 +111,7 @@ def build_keeper(root: Path, mock: bool = False) -> Keeper:
             "primary_reviewer": reviewer_provider,
             "primary_repairer": repairer_provider,
             "primary_post_repair_reviewer": post_repair_reviewer,
-            "ollama": ollama,
+            "qwen": qwen,
         },
         dict(config.provider_routes),
     )
@@ -235,7 +235,9 @@ def parser() -> argparse.ArgumentParser:
             "project an existing Authority-qualified provider into Keeper Desktop"
         ),
     )
-    provider_sync.add_argument("provider_id", choices=("codex", "claude"))
+    provider_sync.add_argument(
+        "provider_id", choices=("codex", "claude", "gemini", "qwen")
+    )
     provider_sync.add_argument("registration_id")
     provider_sync.add_argument("qualification_id")
     provider_sync.add_argument(

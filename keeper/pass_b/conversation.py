@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -36,6 +37,17 @@ class ConversationExecutive(Protocol):
     ) -> ProjectCharter: ...
 
     def propose_charter(self, charter: ProjectCharter) -> ProjectCharter: ...
+
+    def active_charter(self, project_id: str) -> ProjectCharter: ...
+
+    def revise_charter(
+        self,
+        active: ProjectCharter,
+        intake: IntakeResult,
+        *,
+        reason: str,
+        authority_basis: str,
+    ) -> ProjectCharter: ...
 
     def request_charter_approval(
         self, charter: ProjectCharter
@@ -109,9 +121,19 @@ class ConversationService:
         self.repository = repository
         self.executive = executive
 
-    def begin(self, message: str) -> ConversationOutcome:
+    def begin(
+        self,
+        message: str,
+        *,
+        founder_revisions: dict[str, Any] | None = None,
+    ) -> ConversationOutcome:
         self._message(None, "FOUNDER", message, "PROJECT_REQUEST")
         project, intake = self.executive.begin(message)
+        if founder_revisions:
+            intake = ConversationIntake.revise(
+                intake,
+                replacements=founder_revisions,
+            )
         draft = self.executive.draft(project.project_id, intake)
         proposed = self.executive.propose_charter(draft)
         now = _now()
@@ -141,6 +163,77 @@ class ConversationService:
             True,
         )
 
+    @staticmethod
+    def conversational_reply(message: str) -> str | None:
+        """Return a safe non-project reply for unmistakably conversational input."""
+        clean = " ".join(message.strip().split())
+        if not clean:
+            raise ValueError("conversation message cannot be empty")
+        normalized = re.sub(r"[^a-z0-9' ]+", " ", clean.casefold())
+        normalized = " ".join(normalized.split())
+        project_action = re.search(
+            r"\b(build|create|develop|implement|fix|change|update|design|write|"
+            r"research|analy[sz]e|add|remove|test|install|deploy|refactor|"
+            r"document|investigate|plan|make)\b",
+            normalized,
+        )
+        if project_action:
+            return None
+        if re.search(r"\b(are you ready|ready to go|you ready)\b", normalized):
+            return (
+                "Yes, I'm ready. Tell me what you want to build or change, and "
+                "I'll help shape it into a project before anything runs."
+            )
+        if re.fullmatch(
+            r"(hello|hi|hey|greetings)( keeper)?( there)?",
+            normalized,
+        ):
+            return (
+                "Hello. Tell me what you want to build or change, and I'll help "
+                "develop the idea before anything runs."
+            )
+        if re.search(
+            r"\b(what can you do|how does this work|how do you work)\b",
+            normalized,
+        ):
+            return (
+                "Describe the result you want in plain language. I'll develop the "
+                "scope, prepare a project charter, and carry out the approved work "
+                "with the primary agent you selected."
+            )
+        return None
+
+    def converse(
+        self,
+        project_id: str | None,
+        message: str,
+    ) -> ConversationMessageRecord | None:
+        """Record ordinary conversation without fabricating a project charter."""
+        reply = self.conversational_reply(message)
+        if reply is None:
+            return None
+        self._message(project_id, "FOUNDER", message, "GENERAL_CONVERSATION")
+        return self._message(
+            project_id,
+            "KEEPER",
+            reply,
+            "GENERAL_CONVERSATION_RESPONSE",
+        )
+
+    def respond(
+        self,
+        project_id: str | None,
+        message: str,
+        reply: str,
+        *,
+        message_kind: str = "PROJECT_STATUS_RESPONSE",
+    ) -> ConversationMessageRecord:
+        """Durably record a read-only Keeper answer derived from trusted state."""
+        if not message.strip() or not reply.strip():
+            raise ValueError("conversation message and reply cannot be empty")
+        self._message(project_id, "FOUNDER", message, "PROJECT_QUESTION")
+        return self._message(project_id, "KEEPER", reply, message_kind)
+
     def continue_project(
         self, project_id: str, message: str
     ) -> ConversationOutcome | None:
@@ -154,6 +247,28 @@ class ConversationService:
                 "charter approval is already pending; approve or revise it explicitly"
             )
         if current.state == "APPROVED":
+            lower = message.casefold()
+            revision_requested = any(
+                marker in lower
+                for marker in (
+                    "revise the charter",
+                    "revise this charter",
+                    "change the charter",
+                    "update the charter",
+                )
+            )
+            if revision_requested:
+                extracted = ConversationIntake().extract(message)
+                replacements = {
+                    name: item.value
+                    for name, item in extracted.fields.items()
+                    if item.provenance == "EXPLICIT"
+                }
+                if not replacements:
+                    raise ValueError(
+                        "charter revision did not provide an explicit clarification"
+                    )
+                return self.revise(project_id, replacements)
             self._message(
                 project_id,
                 "KEEPER",
@@ -181,7 +296,17 @@ class ConversationService:
         intake = ConversationIntake.revise(
             _intake_from_dict(current.intake), replacements=replacements
         )
-        draft = self.executive.draft(project_id, intake)
+        active: ProjectCharter | None = None
+        if current.state == "APPROVED":
+            active = self.executive.active_charter(project_id)
+            draft = self.executive.revise_charter(
+                active,
+                intake,
+                reason="Founder requested charter renewal or revision",
+                authority_basis="Explicit Founder conversation revision",
+            )
+        else:
+            draft = self.executive.draft(project_id, intake)
         proposed = self.executive.propose_charter(draft)
         now = _now()
         self.repository.replace(
@@ -223,8 +348,12 @@ class ConversationService:
                 name=proposed.title,
                 project_type=proposed.project_type,
                 state="AWAITING_CHARTER_APPROVAL",
-                active_charter_id=None,
-                active_charter_revision=None,
+                active_charter_id=(
+                    active.charter_id if active is not None else None
+                ),
+                active_charter_revision=(
+                    active.revision if active is not None else None
+                ),
                 pause_reason=None,
                 created_at=proposed.created_at,
                 updated_at=proposed.updated_at,
@@ -376,6 +505,23 @@ class DynamicWorkflowDesigner:
                 ("Produce", "IMPLEMENTER", "Create the deliverables", False),
             ),
         )
+        normalized_constraints = {
+            item.strip().casefold() for item in charter.constraints
+        }
+        if (
+            charter.project_type == "software"
+            and "no source writes" in normalized_constraints
+            and any("no-change codex author" in item.casefold() for item in charter.deliverables)
+            and any("claude" in item.casefold() and "review" in item.casefold() for item in charter.deliverables)
+        ):
+            selected = (
+                (
+                    "Validate with Codex",
+                    "IMPLEMENTER",
+                    "Produce the approved no-change validation evidence",
+                    True,
+                ),
+            )
         steps: list[WorkflowStepBlueprint] = []
         previous: str | None = None
         for title, role, objective, independent in selected:

@@ -23,7 +23,7 @@ SID = "S-1-5-21-1000"
 
 
 def test_recovery_release_keeps_protocol_and_schema_stable() -> None:
-    assert SERVICE_VERSION == "1.7.50"
+    assert SERVICE_VERSION == "1.7.52"
     assert PROTOCOL_VERSION == 7
     assert SERVICE_SCHEMA_VERSION == 6
 
@@ -41,7 +41,7 @@ def test_provider_host_identity_failure_leaves_core_available_and_fails_closed(
 
     assert not worker.is_alive()
     diagnostics = core._diagnostics({}, SID)
-    assert diagnostics["service_version"] == "1.7.50"
+    assert diagnostics["service_version"] == "1.7.52"
     assert diagnostics["schema_version"] == 6
     assert diagnostics["provider_host"] == {
         "installed": False,

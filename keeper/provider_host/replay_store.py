@@ -354,6 +354,42 @@ class ProviderHostStore:
 
     def active_or_uncertain_summary(self) -> dict[str, object]:
         records = self.list_active()
+        return self._launch_summary(records)
+
+    def recovery_barrier_summary(self) -> dict[str, object]:
+        """Advance a durable barrier and snapshot the launch journal atomically."""
+
+        with self.connect() as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT value FROM metadata WHERE key='recovery_barrier_generation'"
+                ).fetchone()
+                generation = 1 if row is None else int(row[0]) + 1
+                connection.execute(
+                    "INSERT INTO metadata(key,value) VALUES(?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    ("recovery_barrier_generation", str(generation)),
+                )
+                records = [
+                    dict(item)
+                    for item in connection.execute(
+                        "SELECT * FROM launches WHERE state IN "
+                        "('CLAIMED','STARTED','RUNNING','UNCERTAIN') "
+                        "ORDER BY launch_id"
+                    ).fetchall()
+                ]
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        return {
+            "recovery_barrier_generation": generation,
+            **self._launch_summary(records),
+        }
+
+    @staticmethod
+    def _launch_summary(records: list[dict[str, object]]) -> dict[str, object]:
         entries = [_public_launch_record(record) for record in records]
         active = sum(
             1 for record in records if record["state"] in {"CLAIMED", "STARTED", "RUNNING"}

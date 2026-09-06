@@ -88,6 +88,34 @@ def test_natural_language_intake_tracks_provenance_and_assumptions(tmp_path: Pat
     assert "success" in result.unresolved_questions[0].lower()
 
 
+def test_intake_proposes_full_delegation_for_conversation_first_projects() -> None:
+    result = ConversationIntake().extract(
+        "Build a small application called Pocket List for tracking chores."
+    )
+
+    assert result.explicit("delegation_mode") == "FULL_DELEGATION"
+    assert result.fields["delegation_mode"].provenance == "PROPOSED_ASSUMPTION"
+    assert any(
+        "inside its approved boundaries" in assumption
+        for assumption in result.proposed_assumptions
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Build it for me.",
+        "Make it happen.",
+        "Do what you think is best.",
+    ),
+)
+def test_intake_recognizes_natural_full_delegation_phrases(message: str) -> None:
+    result = ConversationIntake().extract(message)
+
+    assert result.explicit("delegation_mode") == "FULL_DELEGATION"
+    assert result.fields["delegation_mode"].provenance == "EXPLICIT"
+
+
 def test_intake_accepts_explicit_success_criteria_and_audience() -> None:
     result = ConversationIntake().extract(
         "Create a software application called Keeper Acceptance in "
@@ -108,6 +136,20 @@ def test_intake_accepts_explicit_success_criteria_and_audience() -> None:
     assert result.fields["target_audience"].provenance == "EXPLICIT"
     assert result.fields["approved_providers"].value == ("codex", "local-reviewer")
     assert result.fields["approved_tools"].value == ("filesystem",)
+
+
+def test_intake_accepts_colons_after_natural_are_and_is_phrasing() -> None:
+    result = ConversationIntake().extract(
+        "Success criteria are: the warning is removed; tests pass. "
+        "Primary user is: Devon. Approved providers are: codex and claude."
+    )
+
+    assert result.fields["success_criteria"].value == (
+        "the warning is removed",
+        "tests pass",
+    )
+    assert result.fields["target_audience"].value == "Devon"
+    assert result.fields["approved_providers"].value == ("codex", "claude")
 
 
 def test_revision_replaces_assumption_and_removes_deliverable(tmp_path: Path) -> None:

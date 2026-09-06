@@ -1373,9 +1373,12 @@ class AuthorityStore:
                     raise PermissionError(
                         "higher launch generation requires the exact next revoked epoch"
                     )
-            elif generation != 1 or payload.get("revocation_epoch") != 0:
+            elif (
+                generation < 1
+                or payload.get("revocation_epoch") != generation - 1
+            ):
                 raise PermissionError(
-                    "initial launch authorization generation must be one"
+                    "initial launch authorization generation and revocation epoch are inconsistent"
                 )
             expected_consumption = {
                 "capability_id", "project_id", "approval_record_id",
@@ -1531,6 +1534,12 @@ class AuthorityStore:
         project_scope = set(scope_value)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._assert_or_bind_executive_identity_in_connection(
+                connection,
+                client_sid,
+                str(identity["target_database_id"]),
+                int(identity["target_recovery_epoch"]),
+            )
             self._assert_projects_unfenced(connection, project_scope)
             snapshot = self._restore_snapshot(connection, project_scope)
             payload = {
@@ -1607,7 +1616,7 @@ class AuthorityStore:
         now = _now()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row, _payload = self._active_fence(
+            row, fence_payload = self._active_fence(
                 connection, fence_id, restore_operation_id, client_sid
             )
             if (
@@ -1621,12 +1630,143 @@ class AuthorityStore:
                 "WHERE fence_id=? AND state='ACTIVE'",
                 (state, now, fence_id),
             )
+            if state == "COMPLETED":
+                self._replace_executive_identity_in_connection(
+                    connection,
+                    client_sid,
+                    str(fence_payload["target_database_id"]),
+                    int(fence_payload["target_recovery_epoch"]) + 1,
+                )
         return {
             "fence_id": fence_id,
             "restore_operation_id": restore_operation_id,
             "state": state,
             "finished_at": now,
         }
+
+    def assert_or_bind_executive_identity(
+        self, client_sid: str, database_id: str, recovery_epoch: int
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            return self._assert_or_bind_executive_identity_in_connection(
+                connection, client_sid, database_id, recovery_epoch
+            )
+
+    def reconcile_executive_identity(
+        self,
+        client_sid: str,
+        source_database_id: str,
+        source_recovery_epoch: int,
+        target_database_id: str,
+        target_recovery_epoch: int,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_or_bind_executive_identity_in_connection(
+                connection,
+                client_sid,
+                source_database_id,
+                source_recovery_epoch,
+            )
+            return self._replace_executive_identity_in_connection(
+                connection,
+                client_sid,
+                target_database_id,
+                target_recovery_epoch,
+            )
+
+    @staticmethod
+    def _executive_identity_key(client_sid: str) -> str:
+        return "executive_repository_identity:" + hashlib.sha256(
+            client_sid.casefold().encode("utf-8")
+        ).hexdigest()
+
+    @classmethod
+    def _assert_or_bind_executive_identity_in_connection(
+        cls,
+        connection: sqlite3.Connection,
+        client_sid: str,
+        database_id: str,
+        recovery_epoch: int,
+    ) -> dict[str, Any]:
+        key = cls._executive_identity_key(client_sid)
+        row = connection.execute(
+            "SELECT value FROM service_meta WHERE key=?", (key,)
+        ).fetchone()
+        expected = {
+            "client_sid": client_sid,
+            "database_id": database_id,
+            "recovery_epoch": recovery_epoch,
+        }
+        if row is None:
+            return cls._replace_executive_identity_in_connection(
+                connection, client_sid, database_id, recovery_epoch
+            )
+        stored = cls._decode_executive_identity(str(row["value"]))
+        if stored != expected:
+            raise PermissionError(
+                "Executive recovery receipt identity differs from reconciled state"
+            )
+        return stored
+
+    @classmethod
+    def _replace_executive_identity_in_connection(
+        cls,
+        connection: sqlite3.Connection,
+        client_sid: str,
+        database_id: str,
+        recovery_epoch: int,
+    ) -> dict[str, Any]:
+        if not client_sid or not database_id or recovery_epoch < 0:
+            raise PermissionError("Executive repository identity is invalid")
+        payload = {
+            "client_sid": client_sid,
+            "database_id": database_id,
+            "recovery_epoch": recovery_epoch,
+        }
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        wrapped = json.dumps(
+            {
+                "payload": serialized,
+                "payload_hash": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        connection.execute(
+            "INSERT INTO service_meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (cls._executive_identity_key(client_sid), wrapped),
+        )
+        return payload
+
+    @staticmethod
+    def _decode_executive_identity(value: str) -> dict[str, Any]:
+        wrapped = json.loads(value)
+        if not isinstance(wrapped, dict) or set(wrapped) != {"payload", "payload_hash"}:
+            raise RuntimeError("Authority Executive identity is malformed")
+        serialized = wrapped.get("payload")
+        if (
+            not isinstance(serialized, str)
+            or hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+            != wrapped.get("payload_hash")
+        ):
+            raise RuntimeError("Authority Executive identity integrity failed")
+        payload = json.loads(serialized)
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"client_sid", "database_id", "recovery_epoch"}
+            or not isinstance(payload.get("client_sid"), str)
+            or not payload["client_sid"]
+            or not isinstance(payload.get("database_id"), str)
+            or not payload["database_id"]
+            or isinstance(payload.get("recovery_epoch"), bool)
+            or not isinstance(payload.get("recovery_epoch"), int)
+            or payload["recovery_epoch"] < 0
+        ):
+            raise RuntimeError("Authority Executive identity is malformed")
+        return payload
 
     def recover_restore_fence(
         self, fence_id: str, restore_operation_id: str, client_sid: str

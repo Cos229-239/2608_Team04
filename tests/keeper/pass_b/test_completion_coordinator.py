@@ -134,6 +134,35 @@ def test_one_approval_autonomous_completion_reaches_terminal_workflow(
     assert all(item.project_type == "software" for item in profiles)
 
 
+def test_primary_agent_is_preferred_but_independent_review_stays_separate(
+    tmp_path: Path,
+) -> None:
+    application, project_id = _application(tmp_path)
+    application.store.upsert(
+        "settings",
+        "routing",
+        {"conversation_provider_id": "local-reviewer"},
+    )
+
+    results = application.run_delegated_completion(project_id, max_steps=50)
+
+    assert results[-1].state == "COMPLETED"
+    assignments = application.repository.list(
+        AssignmentRecord,
+        project_id=project_id,
+    )
+    producers = [
+        item for item in assignments if item.role != AssignmentRole.REVIEWER
+    ]
+    reviewers = [
+        item for item in assignments if item.role == AssignmentRole.REVIEWER
+    ]
+    assert producers
+    assert reviewers
+    assert {item.provider_id for item in producers} == {"local-reviewer"}
+    assert {item.provider_id for item in reviewers} == {"local-builder"}
+
+
 def test_completion_coordinator_is_restart_resumable(tmp_path: Path) -> None:
     application, project_id = _application(tmp_path)
 

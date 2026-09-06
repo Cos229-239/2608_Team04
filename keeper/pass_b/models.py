@@ -674,6 +674,189 @@ class UncertaintyReconciliationRecord(PassBRecord):
 
 
 @dataclass(frozen=True, slots=True)
+class UncertainExecutionDispositionRecord(PassBRecord):
+    disposition_id: str
+    project_id: str
+    charter_id: str
+    charter_revision: int
+    approval_charter_id: str
+    approval_charter_revision: int
+    workflow_id: str
+    work_item_id: str
+    assignment_id: str
+    attempt_id: str
+    provider_id: str
+    account_id: str
+    session_id: str
+    model_id: str
+    authority_attempt_id: str
+    launch_token: str
+    external_execution_id: str | None
+    workspace_reservation_ids: tuple[str, ...]
+    write_reservation_ids: tuple[str, ...]
+    write_reservation_digests: tuple[str, ...]
+    usage_reservation_id: str
+    usage_pool_id: str
+    usage_amount: float
+    resolution: str
+    observation_digest: str
+    action_id: str
+    action_digest: str
+    approval_id: str
+    approval_event_id: str
+    founder_identity: str
+    possible_external_effect_preserved: bool
+    inactivity_observation: dict[str, object]
+    inactivity_observation_digest: str
+    authority_disposition: dict[str, object]
+    authority_disposition_digest: str
+    usage_reservation_consumed: bool
+    state: str
+    disposed_at: str
+    created_at: str
+    updated_at: str
+    revision: int
+
+    KIND = "uncertain_execution_disposition"
+    ID_FIELD = "disposition_id"
+    TUPLE_FIELDS = (
+        "workspace_reservation_ids",
+        "write_reservation_ids",
+        "write_reservation_digests",
+    )
+
+    def __post_init__(self) -> None:
+        if (
+            self.charter_revision < 1
+            or self.approval_charter_revision < 1
+            or self.resolution
+            != "FOUNDER_ABANDONED_UNCERTAIN_EXTERNAL_EXECUTION"
+            or self.state != "APPLIED"
+            or not self.possible_external_effect_preserved
+            or not self.usage_reservation_consumed
+            or not self.usage_reservation_id
+            or not self.usage_pool_id
+            or not math.isfinite(self.usage_amount)
+            or self.usage_amount < 0
+            or len(set(self.workspace_reservation_ids))
+            != len(self.workspace_reservation_ids)
+            or len(self.write_reservation_ids)
+            != len(self.write_reservation_digests)
+            or len(set(self.write_reservation_ids))
+            != len(self.write_reservation_ids)
+            or structured_digest(self.inactivity_observation)
+            != self.inactivity_observation_digest
+            or structured_digest(self.authority_disposition)
+            != self.authority_disposition_digest
+            or self.authority_disposition.get("authority_attempt_id")
+            != self.authority_attempt_id
+            or self.authority_disposition.get("approval_id")
+            != self.approval_id
+            or self.authority_disposition.get("action_digest")
+            != self.action_digest
+            or self.authority_disposition.get("observation_digest")
+            != self.observation_digest
+            or self.authority_disposition.get("terminal_disposition")
+            != "FOUNDER_ABANDONED_UNCERTAIN_EXTERNAL_EXECUTION"
+            or self.authority_disposition.get(
+                "possible_external_effect_preserved"
+            ) is not True
+            or self.authority_disposition.get("retry_authorized") is not False
+            or any(
+                len(value) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in value
+                )
+                for value in (
+                    self.observation_digest,
+                    self.action_digest,
+                    self.inactivity_observation_digest,
+                    self.authority_disposition_digest,
+                    *self.write_reservation_digests,
+                )
+            )
+            or not self.founder_identity.startswith("S-1-")
+        ):
+            raise ValueError(
+                "uncertain execution disposition binding is invalid"
+            )
+        _timestamp(self.disposed_at, "disposed_at")
+        _timestamp(self.created_at, "created_at")
+        _timestamp(self.updated_at, "updated_at")
+        _positive_revision(self.revision)
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorityReservationReconciliationRecord(PassBRecord):
+    reconciliation_id: str
+    project_id: str
+    charter_id: str
+    charter_revision: int
+    workflow_id: str
+    work_item_id: str
+    assignment_id: str
+    attempt_id: str
+    authority_attempt_id: str
+    observation_digest: str
+    service_key_id: str
+    service_key_version: int
+    client_sid: str
+    released_workspace_reservation_ids: tuple[str, ...]
+    released_write_reservation_ids: tuple[str, ...]
+    released_usage_reservation_id: str | None
+    released_usage_pool_id: str | None
+    released_usage_amount: float
+    state: str
+    reconciled_at: str
+    created_at: str
+    updated_at: str
+    revision: int
+
+    KIND = "authority_reservation_reconciliation"
+    ID_FIELD = "reconciliation_id"
+    TUPLE_FIELDS = (
+        "released_workspace_reservation_ids",
+        "released_write_reservation_ids",
+    )
+
+    def __post_init__(self) -> None:
+        if (
+            self.charter_revision < 1
+            or self.state != "APPLIED"
+            or not self.attempt_id
+            or not self.authority_attempt_id
+            or len(self.observation_digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.observation_digest
+            )
+            or not self.service_key_id
+            or self.service_key_version < 1
+            or not self.client_sid.startswith("S-1-")
+            or not math.isfinite(self.released_usage_amount)
+            or self.released_usage_amount < 0
+            or (self.released_usage_reservation_id is None)
+            != (self.released_usage_pool_id is None)
+            or (
+                self.released_usage_reservation_id is None
+                and self.released_usage_amount != 0
+            )
+            or len(set(self.released_workspace_reservation_ids))
+            != len(self.released_workspace_reservation_ids)
+            or len(set(self.released_write_reservation_ids))
+            != len(self.released_write_reservation_ids)
+        ):
+            raise ValueError(
+                "Authority reservation reconciliation binding is invalid"
+            )
+        _timestamp(self.reconciled_at, "reconciled_at")
+        _timestamp(self.created_at, "created_at")
+        _timestamp(self.updated_at, "updated_at")
+        _positive_revision(self.revision)
+
+
+@dataclass(frozen=True, slots=True)
 class PrelaunchAbandonmentRecord(PassBRecord):
     abandonment_id: str
     project_id: str
@@ -1300,6 +1483,8 @@ PASS_B_RECORD_TYPES: tuple[type[PassBRecord], ...] = (
     ProviderSelectionRecord,
     AttemptRecord,
     UncertaintyReconciliationRecord,
+    UncertainExecutionDispositionRecord,
+    AuthorityReservationReconciliationRecord,
     PrelaunchAbandonmentRecord,
     RepositorySnapshotRecord,
     DeliveredInputRecord,

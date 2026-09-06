@@ -456,7 +456,7 @@ def test_claude_predispatch_claim_resumes_same_identity_after_release_restart(
             assert arguments["planned_challenge"] == observed["challenge"]
             raise ReachedRecoveredClaim("resumed exact durable Claude claim")
 
-    monkeypatch.setattr(authority_core, "SERVICE_VERSION", "1.7.50")
+    monkeypatch.setattr(authority_core, "SERVICE_VERSION", "1.7.52")
     restarted_core = AuthorityServiceCore(
         tmp_path / "authority", observer=RestartedObserver()  # type: ignore[arg-type]
     )

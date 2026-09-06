@@ -37,6 +37,35 @@ from keeper.executive.repository import (
 from keeper.executive.state import transition_project
 
 
+_CHARTER_CONTENT_FIELDS = (
+    "purpose",
+    "problem_statement",
+    "desired_outcome",
+    "deliverables",
+    "non_goals",
+    "success_criteria",
+    "constraints",
+    "assumptions",
+    "unresolved_questions",
+    "timeline",
+    "budget_policy",
+    "budget_limit",
+    "approved_tools",
+    "approved_providers",
+    "prohibited_tools",
+    "prohibited_providers",
+    "workspaces",
+    "data_privacy_restrictions",
+    "risk_classification",
+    "delegation_mode",
+    "authority_envelope",
+    "escalation_rules",
+    "review_requirements",
+    "evidence_requirements",
+    "completion_definition",
+)
+
+
 class CharterService:
     __slots__ = (
         "__repository", "__authenticator", "__production", "__sealed",
@@ -125,6 +154,83 @@ class CharterService:
     def draft(self, project: ProjectRecord, intake: IntakeResult) -> ProjectCharter:
         prior = self.__repository.charters(project.project_id)
         revision = max((item.revision for item in prior), default=0) + 1
+        charter = self._draft_charter_value(
+            project,
+            intake,
+            revision=revision,
+            supersedes_charter_id=(
+                prior[-1].charter_id if prior else None
+            ),
+        )
+        now = charter.created_at
+        self.__repository.save_charter(charter)
+        for assumption in charter.assumptions:
+            self.__repository.insert_assumption(
+                AssumptionRecord(
+                    new_id("assumption"),
+                    project.project_id,
+                    revision,
+                    assumption,
+                    "conversation intake",
+                    0.6,
+                    "Confirm during charter review.",
+                    "May change scope, schedule, or completion criteria.",
+                    "PROPOSED",
+                    None,
+                    now,
+                )
+            )
+        drafted_project = transition_project(
+            project
+            if project.state
+            in {
+                ExecutiveState.INTAKE,
+                ExecutiveState.CLARIFICATION_REQUIRED,
+            }
+            else replace(project, state=ExecutiveState.INTAKE.value),
+            ExecutiveState.CHARTER_DRAFT,
+        )
+        self.__repository.save_project(
+            drafted_project,
+            expected=project,
+        )
+        return charter
+
+    def revise_from_intake(
+        self,
+        active: ProjectCharter,
+        intake: IntakeResult,
+        *,
+        reason: str,
+        authority_basis: str,
+    ) -> ProjectCharter:
+        project = self.__repository.project(active.project_id)
+        candidate = self._draft_charter_value(
+            project,
+            intake,
+            revision=active.revision + 1,
+            supersedes_charter_id=active.charter_id,
+        )
+        candidate_data = candidate.to_dict()
+        changes = {
+            name: candidate_data[name]
+            for name in _CHARTER_CONTENT_FIELDS
+        }
+        return self.revise(
+            active,
+            changes,
+            reason=reason,
+            authority_basis=authority_basis,
+        )
+
+    @staticmethod
+    def _draft_charter_value(
+        project: ProjectRecord,
+        intake: IntakeResult,
+        *,
+        revision: int,
+        supersedes_charter_id: str | None,
+    ) -> ProjectCharter:
         now = utc_now()
         workspace_values = tuple(str(item) for item in intake.explicit("workspaces", ()))
         provider_values = tuple(
@@ -171,7 +277,7 @@ class CharterService:
             None,
             budget_currency,
         )
-        charter = ProjectCharter(
+        return ProjectCharter(
             new_id("charter"),
             project.project_id,
             project.name,
@@ -203,7 +309,7 @@ class CharterService:
             tuple(str(item) for item in intake.explicit("completion_definition", ("All success criteria and deliverables are satisfied.",))),
             revision,
             CharterStatus.DRAFT.value,
-            prior[-1].charter_id if prior else None,
+            supersedes_charter_id,
             None,
             (),
             None,
@@ -211,38 +317,6 @@ class CharterService:
             now,
             now,
         )
-        self.__repository.save_charter(charter)
-        for assumption in charter.assumptions:
-            self.__repository.insert_assumption(
-                AssumptionRecord(
-                    new_id("assumption"),
-                    project.project_id,
-                    revision,
-                    assumption,
-                    "conversation intake",
-                    0.6,
-                    "Confirm during charter review.",
-                    "May change scope, schedule, or completion criteria.",
-                    "PROPOSED",
-                    None,
-                    now,
-                )
-            )
-        drafted_project = transition_project(
-            project
-            if project.state
-            in {
-                ExecutiveState.INTAKE,
-                ExecutiveState.CLARIFICATION_REQUIRED,
-            }
-            else replace(project, state=ExecutiveState.INTAKE.value),
-            ExecutiveState.CHARTER_DRAFT,
-        )
-        self.__repository.save_project(
-            drafted_project,
-            expected=project,
-        )
-        return charter
 
     def propose(self, charter: ProjectCharter) -> ProjectCharter:
         if charter.status != CharterStatus.DRAFT:

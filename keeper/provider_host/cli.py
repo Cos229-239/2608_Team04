@@ -106,7 +106,7 @@ def parser() -> argparse.ArgumentParser:
         "--expected-account-identity-digest", required=True
     )
     replacement.add_argument(
-        "--expected-account-plan-type", choices=("plus", "pro"), required=True
+        "--expected-account-plan-type", choices=("max", "plus", "pro"), required=True
     )
     replacement.add_argument(
         "--account-identity-discovery-digest", required=True
@@ -122,6 +122,9 @@ def parser() -> argparse.ArgumentParser:
     qualification_retry.add_argument("--qualification-id", required=True)
     qualification_retry.add_argument(
         "--qualification-failure-digest", required=True
+    )
+    qualification_retry.add_argument(
+        "--retry-generation", type=int, choices=(2, 3), default=2
     )
     return result
 
@@ -255,6 +258,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     qualification_failure_digest=(
                         options.qualification_failure_digest
                     ),
+                    retry_generation=options.retry_generation,
                 )
             print(json.dumps(enrollment_value, indent=2, sort_keys=True))
             return 0
