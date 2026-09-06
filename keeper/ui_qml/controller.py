@@ -150,7 +150,7 @@ class KeeperDesktopController(QObject):
     setupChanged = Signal()
     conversationDraftChanged = Signal()
     operationFinished = Signal(str, bool)
-    _asyncFinished = Signal(object, str, str, bool)
+    rebootRequested = Signal()
 
     def __init__(
         self,
@@ -250,10 +250,11 @@ class KeeperDesktopController(QObject):
     def refresh(self) -> None:
         self._run("Durable state refreshed", self._build_state, result_to_state=True)
 
-    def _refresh_state_only(self) -> None:
-        """Refresh presentation data without replacing useful operation feedback."""
-        self._state = self._build_state()
-        self.stateChanged.emit()
+    @Slot()
+    def reboot(self) -> None:
+        self._status, self._error = "Rebooting Keeper Desktop", ""
+        self.statusChanged.emit()
+        self.rebootRequested.emit()
 
     def _build_state(self) -> dict[str, Any]:
         snapshot = self.pass_b.product_snapshot()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +125,7 @@ def main(arguments: list[str] | None = None) -> int:
         smoke=options.ui_smoke,
         screenshot_directory=options.screenshot_dir,
         test_fixture=options.test_ui_fixture or options.ui_smoke,
+        restart_command=[sys.executable, "-m", "keeper.ui_qml", *sys.argv[1:]],
     )
 
 
