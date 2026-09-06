@@ -40,6 +40,8 @@ ApplicationWindow {
     property string reportAvailabilityFilter: "ALL"
     property string providerHealthFilter: "ALL"
     property string recoveryStatusFilter: "ALL"
+    property string pendingConversationText: ""
+    property string failedConversationText: ""
     onSearchQueryChanged: taskPage = 0
     onWidthChanged: {
         if (width >= 1360 && narrowAssistantDialog.visible)
@@ -48,6 +50,53 @@ ApplicationWindow {
 
     function openAssistant() {
         keeper.navigate("Keeper")
+    }
+    function keeperConversationItems() {
+        var items = (keeper.state.timeline || []).slice()
+        if (pendingConversationText.length > 0) {
+            items.push({
+                "kind": "founder",
+                "title": "Founder • Sending",
+                "body": pendingConversationText,
+                "localState": "sending"
+            })
+            items.push({
+                "kind": "keeper",
+                "title": "Keeper",
+                "body": keeper.status || "Keeper is working…",
+                "localState": "working"
+            })
+        } else if (failedConversationText.length > 0) {
+            items.push({
+                "kind": "founder",
+                "title": "Not sent • Saved for retry",
+                "body": failedConversationText,
+                "localState": "failed"
+            })
+        }
+        return items
+    }
+    function sendKeeperConversation() {
+        var outgoing = keeperChatInput.text.trim()
+        if (outgoing.length === 0 || keeper.busy)
+            return
+        keeperChatList.followingNewest = true
+        window.failedConversationText = ""
+        window.pendingConversationText = outgoing
+        keeper.saveConversationDraft(outgoing)
+        keeperChatInput.clear()
+        keeper.sendAssistantMessage(outgoing)
+    }
+
+    Connections {
+        target: keeper
+        function onOperationFinished(message, successful) {
+            if (window.pendingConversationText.length === 0)
+                return
+            if (!successful)
+                window.failedConversationText = window.pendingConversationText
+            window.pendingConversationText = ""
+        }
     }
     function currentDelegationMode() {
         if (!keeper.state.project) return "ADVISORY"
@@ -765,7 +814,7 @@ ApplicationWindow {
                                     clip: true
                                     spacing: 10
                                     boundsBehavior: Flickable.StopAtBounds
-                                    model: keeper.state.timeline || []
+                                    model: window.keeperConversationItems()
                                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                     onCountChanged: {
                                         if (followingNewest)
@@ -818,6 +867,24 @@ ApplicationWindow {
                                 Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
                                 RowLayout {
                                     Layout.fillWidth: true
+                                    visible: window.failedConversationText.length > 0
+                                    spacing: 10
+                                    MutedText {
+                                        Layout.fillWidth: true
+                                        text: "Keeper could not finish that request. Your message is saved."
+                                        color: warning
+                                    }
+                                    QuietButton {
+                                        text: "Edit & retry"
+                                        onClicked: {
+                                            keeperChatInput.text = window.failedConversationText
+                                            window.failedConversationText = ""
+                                            keeperChatInput.forceActiveFocus()
+                                        }
+                                    }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
                                     spacing: 10
                                     TextArea {
                                         id: keeperChatInput
@@ -829,16 +896,35 @@ ApplicationWindow {
                                         placeholderTextColor: "#777777"
                                         wrapMode: TextEdit.Wrap
                                         background: Rectangle { color: "#111313"; border.color: parent.activeFocus ? gold : "#3A3C3A"; radius: 6 }
-                                    }
-                                    GoldButton {
-                                        objectName: "keeperChatSend"
-                                        text: keeper.busy ? "Working…" : "Send"
-                                        enabled: keeperChatInput.text.trim().length > 0 && !keeper.busy
-                                        onClicked: {
-                                            keeperChatList.followingNewest = true
-                                            keeper.sendAssistantMessage(keeperChatInput.text)
-                                            keeperChatInput.clear()
+                                        text: keeper.conversationDraft
+                                        onTextChanged: draftSaveTimer.restart()
+                                        Keys.onPressed: function(event) {
+                                            if ((event.modifiers & Qt.ControlModifier)
+                                                    && (event.key === Qt.Key_Return
+                                                        || event.key === Qt.Key_Enter)) {
+                                                window.sendKeeperConversation()
+                                                event.accepted = true
+                                            }
                                         }
+                                        Timer {
+                                            id: draftSaveTimer
+                                            interval: 400
+                                            repeat: false
+                                            onTriggered: {
+                                                if (window.pendingConversationText.length === 0)
+                                                    keeper.saveConversationDraft(keeperChatInput.text)
+                                            }
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        spacing: 5
+                                        GoldButton {
+                                            objectName: "keeperChatSend"
+                                            text: keeper.busy ? "Working…" : "Send"
+                                            enabled: keeperChatInput.text.trim().length > 0 && !keeper.busy
+                                            onClicked: window.sendKeeperConversation()
+                                        }
+                                        MutedText { text: "Ctrl+Enter to send\nDraft saved locally"; font.pixelSize: 10 }
                                     }
                                 }
                             }

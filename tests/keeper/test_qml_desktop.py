@@ -200,6 +200,42 @@ def test_production_chat_send_returns_before_durable_refresh_finishes(
     assert controller._get_status() == "Keeper replied"
 
 
+def test_conversation_draft_is_durable_and_clears_after_success(
+    controller: KeeperDesktopController,
+) -> None:
+    message = "Draft a Keeper reliability improvement."
+    controller.saveConversationDraft(message)
+
+    stored = controller.application.store.get("settings", "conversation_draft")
+    assert stored == {"message": message}
+    assert controller._get_conversation_draft() == message
+
+    controller.sendAssistantMessage("Hello Keeper, are you ready?")
+
+    assert controller._get_conversation_draft() == ""
+    assert controller.application.store.get("settings", "conversation_draft") is None
+
+
+def test_failed_conversation_preserves_the_saved_draft(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = "Hello Keeper, are you ready?"
+    monkeypatch.setattr(
+        controller.pass_b,
+        "casual_conversation",
+        lambda project_id, text: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    controller.sendAssistantMessage(message)
+
+    assert controller._get_error() == "offline"
+    assert controller._get_conversation_draft() == message
+    assert controller.application.store.get("settings", "conversation_draft") == {
+        "message": message
+    }
+
+
 def test_primary_agent_selection_is_ready_only_and_durable(
     controller: KeeperDesktopController,
 ) -> None:
@@ -692,6 +728,22 @@ def test_rendered_smoke_contract_covers_all_pages_at_wide_and_minimum() -> None:
     assert '("minimum", 1120, 700)' in source
     assert "for page in NAVIGATION" in source
     assert '"rendered_frames": captured_frames' in source
+
+
+def test_keeper_chat_shows_pending_work_and_preserves_failed_messages() -> None:
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+
+    assert 'property string pendingConversationText: ""' in qml
+    assert 'property string failedConversationText: ""' in qml
+    assert '"title": "Founder • Sending"' in qml
+    assert '"localState": "working"' in qml
+    assert "window.failedConversationText = window.pendingConversationText" in qml
+    assert 'text: "Edit & retry"' in qml
+    assert "keeper.sendAssistantMessage(outgoing)" in qml
+    assert "keeper.saveConversationDraft(outgoing)" in qml
+    assert "Ctrl+Enter to send" in qml
 
 def _is_primitive(value: object) -> bool:
     if value is None or isinstance(value, (str, int, float, bool)):
