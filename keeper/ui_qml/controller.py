@@ -148,6 +148,7 @@ class KeeperDesktopController(QObject):
     busyChanged = Signal()
     statusChanged = Signal()
     setupChanged = Signal()
+    conversationDraftChanged = Signal()
     operationFinished = Signal(str, bool)
     _asyncFinished = Signal(object, str, str, bool)
 
@@ -167,6 +168,12 @@ class KeeperDesktopController(QObject):
         self._error = ""
         self._developer_details = False
         self._new_project_intake = False
+        stored_draft = self.application.store.get(
+            "settings", "conversation_draft"
+        )
+        self._conversation_draft = str(
+            (stored_draft or {}).get("message") or ""
+        )
         self._test_fixture = test_fixture
         self._setup = ProductSetupController(application)
         self._state: dict[str, Any] = {}
@@ -208,6 +215,13 @@ class KeeperDesktopController(QObject):
         return self._error
 
     error = Property(str, _get_error, notify=statusChanged)
+
+    def _get_conversation_draft(self) -> str:
+        return self._conversation_draft
+
+    conversationDraft = Property(
+        str, _get_conversation_draft, notify=conversationDraftChanged
+    )
 
     def _get_setup_required(self) -> bool:
         return not self.application.setup_complete()
@@ -530,6 +544,7 @@ class KeeperDesktopController(QObject):
         if not clean:
             self._fail("Describe the project or ask Keeper a question first.")
             return
+        self.saveConversationDraft(clean)
         project_id = self.pass_b.selected_project_id()
 
         if re.search(
@@ -602,6 +617,21 @@ class KeeperDesktopController(QObject):
             "Keeper recorded the conversation",
             operation,
         )
+
+    @Slot(str)
+    def saveConversationDraft(self, message: str) -> None:
+        if message == self._conversation_draft:
+            return
+        self._conversation_draft = message
+        if message:
+            self.application.store.upsert(
+                "settings",
+                "conversation_draft",
+                {"message": message},
+            )
+        else:
+            self.application.store.delete("settings", "conversation_draft")
+        self.conversationDraftChanged.emit()
 
     @Slot(str)
     def selectConversationProvider(self, provider_id: str) -> None:
@@ -1067,6 +1097,8 @@ class KeeperDesktopController(QObject):
     ) -> None:
         if self._test_fixture:
             self._run(success, operation)
+            if not self._error:
+                self.saveConversationDraft("")
             return
         if self._busy:
             return
@@ -1106,6 +1138,8 @@ class KeeperDesktopController(QObject):
         if isinstance(state, dict):
             self._state = state
             self.stateChanged.emit()
+        if success:
+            self.saveConversationDraft("")
         self._busy = False
         self._status, self._error = status, error
         self.busyChanged.emit()

@@ -76,6 +76,17 @@ ApplicationWindow {
         }
         return items
     }
+    function sendKeeperConversation() {
+        var outgoing = keeperChatInput.text.trim()
+        if (outgoing.length === 0 || keeper.busy)
+            return
+        keeperChatList.followingNewest = true
+        window.failedConversationText = ""
+        window.pendingConversationText = outgoing
+        keeper.saveConversationDraft(outgoing)
+        keeperChatInput.clear()
+        keeper.sendAssistantMessage(outgoing)
+    }
 
     Connections {
         target: keeper
@@ -885,19 +896,35 @@ ApplicationWindow {
                                         placeholderTextColor: "#777777"
                                         wrapMode: TextEdit.Wrap
                                         background: Rectangle { color: "#111313"; border.color: parent.activeFocus ? gold : "#3A3C3A"; radius: 6 }
-                                    }
-                                    GoldButton {
-                                        objectName: "keeperChatSend"
-                                        text: keeper.busy ? "Working…" : "Send"
-                                        enabled: keeperChatInput.text.trim().length > 0 && !keeper.busy
-                                        onClicked: {
-                                            var outgoing = keeperChatInput.text.trim()
-                                            keeperChatList.followingNewest = true
-                                            window.failedConversationText = ""
-                                            window.pendingConversationText = outgoing
-                                            keeperChatInput.clear()
-                                            keeper.sendAssistantMessage(outgoing)
+                                        text: keeper.conversationDraft
+                                        onTextChanged: draftSaveTimer.restart()
+                                        Keys.onPressed: function(event) {
+                                            if ((event.modifiers & Qt.ControlModifier)
+                                                    && (event.key === Qt.Key_Return
+                                                        || event.key === Qt.Key_Enter)) {
+                                                window.sendKeeperConversation()
+                                                event.accepted = true
+                                            }
                                         }
+                                        Timer {
+                                            id: draftSaveTimer
+                                            interval: 400
+                                            repeat: false
+                                            onTriggered: {
+                                                if (window.pendingConversationText.length === 0)
+                                                    keeper.saveConversationDraft(keeperChatInput.text)
+                                            }
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        spacing: 5
+                                        GoldButton {
+                                            objectName: "keeperChatSend"
+                                            text: keeper.busy ? "Working…" : "Send"
+                                            enabled: keeperChatInput.text.trim().length > 0 && !keeper.busy
+                                            onClicked: window.sendKeeperConversation()
+                                        }
+                                        MutedText { text: "Ctrl+Enter to send\nDraft saved locally"; font.pixelSize: 10 }
                                     }
                                 }
                             }
