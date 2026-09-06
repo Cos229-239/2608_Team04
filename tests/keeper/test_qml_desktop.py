@@ -693,6 +693,20 @@ def test_rendered_smoke_contract_covers_all_pages_at_wide_and_minimum() -> None:
     assert "for page in NAVIGATION" in source
     assert '"rendered_frames": captured_frames' in source
 
+
+def test_keeper_chat_shows_pending_work_and_preserves_failed_messages() -> None:
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+
+    assert 'property string pendingConversationText: ""' in qml
+    assert 'property string failedConversationText: ""' in qml
+    assert '"title": "Founder • Sending"' in qml
+    assert '"localState": "working"' in qml
+    assert "window.failedConversationText = window.pendingConversationText" in qml
+    assert 'text: "Edit & retry"' in qml
+    assert "keeper.sendAssistantMessage(outgoing)" in qml
+
 def _is_primitive(value: object) -> bool:
     if value is None or isinstance(value, (str, int, float, bool)):
         return True
