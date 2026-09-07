@@ -152,6 +152,31 @@ def test_discovery_includes_blocked_gemini_without_an_executable() -> None:
     "Install the provider CLI or configure its executable path."
 )
 
+def test_discovery_explains_gemini_found_without_valid_registration(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "provider-gemini.exe"
+    executable.write_bytes(b"controlled provider")
+
+    providers = ProviderDiscovery(
+        {
+            "codex": "Z:/does-not-exist",
+            "claude": "Z:/does-not-exist",
+            "gemini": str(executable),
+        }
+    ).discover()
+
+    gemini = next(item for item in providers if item.provider_id == "gemini")
+
+    assert gemini.available is False
+    assert gemini.discovery_state == "blocked"
+    assert gemini.executable == str(executable)
+    assert gemini.detail == (
+        "Gemini CLI command executable was found, but its provider "
+        "registration or authorization is not valid. "
+        "Configured provider has no immutable registration."
+    )
+
 
 def test_discovery_always_includes_available_mock() -> None:
     providers = ProviderDiscovery(
