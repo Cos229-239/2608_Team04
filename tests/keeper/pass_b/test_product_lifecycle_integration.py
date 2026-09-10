@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
 
 import pytest
 
+from keeper.app.storage import KeeperStore
 from keeper.executive.service import KeeperExecutive
 from keeper.executive.models import ProjectCharter, ProjectRecord
 from keeper.pass_b.application import PassBApplication, _activate_and_reload_charter
@@ -17,6 +19,7 @@ from keeper.pass_b.models import (
 )
 from keeper.pass_b.orchestration import authority_envelope_digest
 from keeper.pass_b.pilot import PilotConversationExecutive
+from tests.keeper.executive.fixture_store import replace_executive_fixture
 
 
 def _approved(
@@ -156,6 +159,70 @@ def test_approval_rejects_displayed_charter_identity_mismatch_before_auth(
 
     assert application.conversation.current_context(project_id).state == "PROPOSED"
     assert executive.status(project_id).pending_approvals == ()
+
+
+def test_expired_pending_charter_approval_can_be_reissued(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "executive.db"
+    executive = KeeperExecutive(database)
+    application = PassBApplication(tmp_path, executive=executive)
+
+    outcome = application.begin_conversation(
+        "Build a local software project with no deployment or spending."
+    )
+    project_id = outcome.project.project_id
+
+    original = application.conversation.request_approval(project_id)
+    context = application.conversation.current_context(project_id)
+
+    assert context.state == "APPROVAL_REQUESTED"
+
+    expired = original.to_dict()
+    expired["expires_at"] = (
+        datetime.now(UTC) - timedelta(minutes=1)
+    ).isoformat()
+
+    replace_executive_fixture(
+        KeeperStore(database),
+        "executive_founder_approval_challenges",
+        original.challenge_id,
+        expired,
+    )
+
+    assert executive.status(project_id).pending_approvals == ()
+
+    selected_challenges = []
+
+    def stop_after_challenge(_self, challenge):
+        selected_challenges.append(challenge)
+        raise RuntimeError("test stopped after challenge selection")
+
+    monkeypatch.setattr(
+        KeeperExecutive,
+        "authenticate_founder",
+        stop_after_challenge,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="test stopped after challenge selection",
+    ):
+        application.approve_and_plan_current_charter(
+            project_id,
+            expected_charter_id=context.charter_id,
+            expected_charter_revision=context.charter_revision,
+        )
+
+    assert len(selected_challenges) == 1
+
+    renewed = selected_challenges[0]
+
+    assert renewed.challenge_id != original.challenge_id
+    assert renewed.project_id == original.project_id
+    assert renewed.charter_id == original.charter_id
+    assert renewed.charter_revision == original.charter_revision
 
 
 def test_activation_returns_the_durable_active_charter(tmp_path: Path) -> None:
