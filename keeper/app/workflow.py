@@ -12,13 +12,14 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
 from keeper.agent_runner import AgentRunner
 from keeper.authority_service.client import AuthorityServiceClient
 from keeper.app.git_safety import GitSafetyService
-from keeper.app.lifecycle import RunLifecycle, RunStage
+from keeper.app.lifecycle import RETRYABLE_STAGES, RunLifecycle, RunStage
 from keeper.app.path_safety import validate_path_budget
 from keeper.app.reporting import finalize_evidence
 from keeper.app.storage import KeeperStore
@@ -57,6 +58,15 @@ from keeper.workspace import WorkspaceManager
 _ORIGINAL_PROCESS_EXISTS = process_exists
 
 
+def _serialize_recovery(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Keep recovery from observing a partially published start or retry."""
+    @wraps(method)
+    def guarded(self: WorkflowCoordinator, *args: Any, **kwargs: Any) -> Any:
+        with self._recovery_lock:
+            return method(self, *args, **kwargs)
+    return guarded
+
+
 @dataclass(slots=True)
 class ActiveRun:
     thread: threading.Thread
@@ -84,8 +94,10 @@ class WorkflowCoordinator:
         self.authority = authority
         self._active: dict[str, ActiveRun] = {}
         self._lock = threading.Lock()
+        self._recovery_lock = threading.RLock()
         self.startup_recovery = self.recover_interrupted_runs()
 
+    @_serialize_recovery
     def start(
         self,
         task_id: str,
@@ -163,9 +175,42 @@ class WorkflowCoordinator:
         )
         with self._lock:
             self._active[run_id] = ActiveRun(thread, cancel, pause, approval)
-        thread.start()
+        self._start_registered_worker(run_id, thread)
         return self._run(run_id)
 
+    def _start_registered_worker(self, run_id: str, thread: threading.Thread) -> None:
+        try:
+            thread.start()
+        except Exception:
+            # A failed launch is durable abandoned work, not a live worker.
+            # Preserve its run record so explicit/startup recovery can inspect it.
+            with self._lock:
+                active = self._active.get(run_id)
+                if active is not None and active.thread is thread:
+                    self._active.pop(run_id)
+            raise
+
+    def recovery_action(self, record: dict[str, Any]) -> str:
+        """Advisory UI capability only; run actions still revalidate at execution."""
+        recovery = record.get("recovery")
+        recovery = recovery if isinstance(recovery, dict) else {}
+        if (str(record.get("status", "")).lower() == "uncertain"
+                or str(recovery.get("classification", "")).lower() == "uncertain"):
+            return ""
+        with self._lock:
+            active = self._active.get(str(record.get("id", "")))
+            if active is not None:
+                return "resume" if (active.thread.is_alive()
+                                     and active.pause_requested.is_set()) else ""
+        if (record.get("stage") == RunStage.INTERRUPTED.value
+                and record.get("interrupted_from") in {s.value for s in RETRYABLE_STAGES}
+                and recovery.get("retry_safe") is True
+                and recovery.get("previous_process_running") is False
+                and recovery.get("classification") == "recoverable"):
+            return "retry"
+        return ""
+
+    @_serialize_recovery
     def recover_interrupted_runs(self) -> list[dict[str, Any]]:
         recovered: list[dict[str, Any]] = []
         terminal = {"COMPLETED", "REJECTED", "blocked", "cancelled"}
@@ -175,6 +220,11 @@ class WorkflowCoordinator:
             run_id = str(record.get("id", ""))
             if not run_id:
                 continue
+            # Registry membership includes workers not yet started and paused
+            # workers. Neither is an abandoned run eligible for recovery.
+            with self._lock:
+                if run_id in self._active:
+                    continue
             stage = str(record.get("stage", ""))
             execution_attempt = _durable_active_execution(record)
             evidence_resolution = _resolve_execution_evidence(
@@ -486,6 +536,7 @@ class WorkflowCoordinator:
             recovered.append(current)
         return recovered
 
+    @_serialize_recovery
     def retry(
         self,
         run_id: str,
@@ -494,7 +545,15 @@ class WorkflowCoordinator:
         authorizer: str = "local-user",
         reroute_authorization_id: str | None = None,
     ) -> dict[str, Any]:
+        with self._lock:
+            if run_id in self._active:
+                raise RuntimeError("stage retry is already active")
         previous = self._run(run_id)
+        recovery = previous.get("recovery")
+        if (str(previous.get("status", "")).lower() == "uncertain"
+                or (isinstance(recovery, dict)
+                    and str(recovery.get("classification", "")).lower() == "uncertain")):
+            raise PermissionError("uncertain execution cannot be retried")
         expected = (
             previous.get("interrupted_from")
             if previous.get("stage") == RunStage.INTERRUPTED.value
@@ -531,7 +590,7 @@ class WorkflowCoordinator:
             if run_id in self._active:
                 raise RuntimeError("stage retry is already active")
             self._active[run_id] = ActiveRun(thread, cancel, pause, approval)
-        thread.start()
+        self._start_registered_worker(run_id, thread)
         return current
 
     def retry_routing_preview(self, run_id: str) -> dict[str, Any]:
@@ -673,6 +732,11 @@ class WorkflowCoordinator:
     def resume(self, run_id: str) -> None:
         active = self._active_run(run_id)
         record = self._run(run_id)
+        recovery = record.get("recovery")
+        if (str(record.get("status", "")).lower() == "uncertain"
+                or (isinstance(recovery, dict)
+                    and str(recovery.get("classification", "")).lower() == "uncertain")):
+            raise PermissionError("uncertain execution cannot be resumed")
         interrupted = record.get("interrupted_from")
         if not interrupted:
             raise ValueError("run is not paused")

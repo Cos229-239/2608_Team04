@@ -42,7 +42,12 @@ ApplicationWindow {
     property string recoveryStatusFilter: "ALL"
     property string pendingConversationText: ""
     property string failedConversationText: ""
+    property bool clearingSubmittedDraft: false
     onSearchQueryChanged: taskPage = 0
+    onClosing: function(close) {
+        draftSaveTimer.stop()
+        close.accepted = keeper.flushConversationDraft()
+    }
     onWidthChanged: {
         if (width >= 1360 && narrowAssistantDialog.visible)
             narrowAssistantDialog.close()
@@ -69,7 +74,7 @@ ApplicationWindow {
         } else if (failedConversationText.length > 0) {
             items.push({
                 "kind": "founder",
-                "title": "Not sent • Saved for retry",
+                "title": "Send interrupted • Review before retry",
                 "body": failedConversationText,
                 "localState": "failed"
             })
@@ -80,17 +85,22 @@ ApplicationWindow {
         var outgoing = keeperChatInput.text.trim()
         if (outgoing.length === 0 || keeper.busy)
             return
+        keeper.stageConversationDraft(outgoing)
+        if (!keeper.flushConversationDraft())
+            return
         keeperChatList.followingNewest = true
         window.failedConversationText = ""
         window.pendingConversationText = outgoing
-        keeper.saveConversationDraft(outgoing)
+        window.clearingSubmittedDraft = true
         keeperChatInput.clear()
-        keeper.sendAssistantMessage(outgoing)
+        window.clearingSubmittedDraft = false
+        draftSaveTimer.stop()
+        keeper.sendAssistantMessage(outgoing, true)
     }
 
     Connections {
         target: keeper
-        function onOperationFinished(message, successful) {
+        function onConversationFinished(message, successful) {
             if (window.pendingConversationText.length === 0)
                 return
             if (!successful)
@@ -263,7 +273,8 @@ ApplicationWindow {
             var uncertain = String(item.status || "UNKNOWN").toUpperCase() === "UNCERTAIN"
             return recoveryStatusFilter === "ALL"
                 || (recoveryStatusFilter === "UNCERTAIN" && uncertain)
-                || (recoveryStatusFilter === "RESUMABLE" && !uncertain)
+                || (recoveryStatusFilter === "RESUMABLE" && !uncertain
+                    && (item.recovery_action === "resume" || item.recovery_action === "retry"))
         })
     }
     function text(value, fallback) {
@@ -889,7 +900,7 @@ ApplicationWindow {
                                     spacing: 10
                                     MutedText {
                                         Layout.fillWidth: true
-                                        text: "Keeper could not finish that request. Your message is saved."
+                                        text: "Keeper could not confirm completion. Review the conversation before retrying; your text is saved."
                                         color: warning
                                     }
                                     QuietButton {
@@ -914,8 +925,13 @@ ApplicationWindow {
                                         placeholderTextColor: "#777777"
                                         wrapMode: TextEdit.Wrap
                                         background: Rectangle { color: "#111313"; border.color: parent.activeFocus ? gold : "#3A3C3A"; radius: 6 }
-                                        text: keeper.conversationDraft
-                                        onTextChanged: draftSaveTimer.restart()
+                                        Component.onCompleted: text = keeper.conversationDraft
+                                        onTextChanged: {
+                                            if (!window.clearingSubmittedDraft) {
+                                                keeper.stageConversationDraft(text)
+                                                draftSaveTimer.restart()
+                                            }
+                                        }
                                         Keys.onPressed: function(event) {
                                             if ((event.modifiers & Qt.ControlModifier)
                                                     && (event.key === Qt.Key_Return
@@ -929,8 +945,7 @@ ApplicationWindow {
                                             interval: 400
                                             repeat: false
                                             onTriggered: {
-                                                if (window.pendingConversationText.length === 0)
-                                                    keeper.saveConversationDraft(keeperChatInput.text)
+                                                keeper.flushConversationDraft()
                                             }
                                         }
                                     }
@@ -942,7 +957,7 @@ ApplicationWindow {
                                             enabled: keeperChatInput.text.trim().length > 0 && !keeper.busy
                                             onClicked: window.sendKeeperConversation()
                                         }
-                                        MutedText { text: "Ctrl+Enter to send\nDraft saved locally"; font.pixelSize: 10 }
+                                        MutedText { text: "Ctrl+Enter to send\nLocal draft recovery"; font.pixelSize: 10 }
                                     }
                                 }
                             }
@@ -974,8 +989,21 @@ ApplicationWindow {
                                 SectionTitle { text: "CURRENT CHARTER" }
                                 BodyText { text: window.text(keeper.state.project ? keeper.state.project.title : "", "No current charter"); font.pixelSize: 21; font.weight: Font.DemiBold }
                                 MutedText { text: keeper.state.project && keeper.state.project.charterRevision ? "Revision " + keeper.state.project.charterRevision : "A charter has not been approved." }
-                                BodyText { Layout.fillWidth: true; text: keeper.state.project && keeper.state.project.charter && keeper.state.project.charter.objective ? keeper.state.project.charter.objective : "The approved scope, exclusions, constraints, providers, and delegated envelope appear here." }
-                                Item { Layout.fillHeight: true }
+                                ScrollView {
+                                    id: charterScopeScroll
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    clip: true
+                                    contentWidth: availableWidth
+                                    TextArea {
+                                        objectName: "projectCharterSummary"
+                                        width: charterScopeScroll.availableWidth
+                                        readOnly: true; selectByMouse: true
+                                        text: keeper.state.project ? keeper.state.project.charterSummary || "No charter recorded." : "No charter recorded."
+                                        color: textPrimary; wrapMode: TextEdit.Wrap
+                                        textFormat: TextEdit.PlainText
+                                        background: Rectangle { color: "transparent" }
+                                    }
+                                }
                                 RowLayout { QuietButton { text: "Discuss / Revise"; onClicked: window.openAssistant() } GoldButton { objectName: "approveCharterButton"; visible: keeper.state.project && keeper.state.project.approvalRequired; text: "Review & Approve Charter"; onClicked: charterDialog.open() } }
                             }
                         }
@@ -1220,7 +1248,7 @@ ApplicationWindow {
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 380; SectionTitle { text: "RECOVERY RECORDS" }
                                 ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: recoveryRows(); clip: true
                                     delegate: Rectangle { width: ListView.view.width; height: 78; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
-                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, modelData.run_id); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.reason, "Recovery state requires inspection") } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { visible: String(modelData.source || "") === "pass_b_uncertain_execution"; text: "Resolve safely"; onClicked: keeper.resolveUncertainExecution(modelData.assignment_id) } GoldButton { visible: String(modelData.source || "") !== "pass_b_uncertain_execution"; text: "Resume"; enabled: !!modelData.run_id && String(modelData.status || "").toUpperCase() !== "UNCERTAIN"; onClicked: keeper.runAction(modelData.run_id, "resume") } }
+                                        RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, modelData.run_id); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.reason, "Recovery state requires inspection") } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { visible: String(modelData.source || "") === "pass_b_uncertain_execution"; text: "Resolve safely"; onClicked: keeper.resolveUncertainExecution(modelData.assignment_id) } GoldButton { visible: String(modelData.source || "") !== "pass_b_uncertain_execution"; text: modelData.recovery_action === "retry" ? "Retry stage" : "Resume"; enabled: !!modelData.run_id && (modelData.recovery_action === "resume" || modelData.recovery_action === "retry") && String(modelData.status || "").toUpperCase() !== "UNCERTAIN"; onClicked: keeper.runAction(modelData.run_id, modelData.recovery_action) } }
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No recovery action required"; detail: "Keeper currently has no source-backed interrupted or uncertain run requiring attention." }
                                 }

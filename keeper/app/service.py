@@ -978,6 +978,14 @@ class KeeperApplication:
     def recover_runs(self) -> list[dict[str, Any]]:
         return self.workflow.recover_interrupted_runs()
 
+    def recovery_records(self) -> list[dict[str, Any]]:
+        """Read durable recovery state globally, without probing or stopping work."""
+        return [
+            {**record, "recovery_action": self.workflow.recovery_action(record)}
+            for record in self.store.list("runs")
+            if str(record.get("status", "")).lower() in {"interrupted", "uncertain"}
+        ]
+
     def retry_run(
         self,
         run_id: str,
