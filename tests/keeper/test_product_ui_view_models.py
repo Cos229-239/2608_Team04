@@ -192,6 +192,7 @@ def test_product_view_maps_conversation_control_room_and_evidence() -> None:
     ]
     assert any(item.kind == "warning" for item in view.timeline)
     assert view.workflow_rows[0]["assignment"]["state"] == "RUNNING"
+    assert view.workflow_rows[0]["status"] == "RUNNING"
     assert view.provider_cards[0]["composition"] == "MOCK"
     assert view.usage_cards[0]["status"] == "WAITING_FOR_USAGE_RESET"
     assert view.evidence_cards[0]["review"]["disposition"] == "ACCEPTED"
@@ -200,6 +201,66 @@ def test_product_view_maps_conversation_control_room_and_evidence() -> None:
     assert dict(view.right_rail)["Provider Host"] == "READY"
     assert view.provider_host["provider_state"] == "QUALIFIED"
     assert view.developer_details is None
+
+
+def test_product_view_shows_only_active_charter_workflow() -> None:
+    snapshot = _snapshot()
+    snapshot["executive"] = {  # type: ignore[index]
+        "active_charter": {
+            "charter_id": "charter-current",
+            "revision": 2,
+            "status": "ACTIVE",
+        }
+    }
+    snapshot["project"]["work_items"] = [  # type: ignore[index]
+        {
+            "work_item_id": "stale-work",
+            "charter_id": "charter-old",
+            "charter_revision": 1,
+            "title": "Stale stage",
+            "required_roles": ["IMPLEMENTER"],
+            "state": "READY",
+        },
+        {
+            "work_item_id": "current-work",
+            "charter_id": "charter-current",
+            "charter_revision": 2,
+            "title": "Current stage",
+            "required_roles": ["IMPLEMENTER"],
+            "state": "ASSIGNED",
+        },
+    ]
+    snapshot["project"]["assignments"] = [  # type: ignore[index]
+        {
+            "assignment_id": "assignment-current",
+            "work_item_id": "current-work",
+            "role": "IMPLEMENTER",
+            "state": "LAUNCH_CLAIMED",
+        }
+    ]
+
+    view = build_product_view(snapshot)
+
+    assert [row["title"] for row in view.workflow_rows] == ["Current stage"]
+    assert view.workflow_rows[0]["status"] == "LAUNCH_CLAIMED"
+
+
+def test_active_charter_does_not_remain_as_an_approval_prompt() -> None:
+    snapshot = _snapshot()
+    proposal = snapshot["conversation"]["charter_proposal"]  # type: ignore[index]
+    proposal["charter_id"] = "charter-current"
+    snapshot["conversation"]["approval_required"] = False  # type: ignore[index]
+    snapshot["executive"] = {  # type: ignore[index]
+        "active_charter": {
+            "charter_id": "charter-current",
+            "revision": 2,
+            "status": "ACTIVE",
+        }
+    }
+
+    view = build_product_view(snapshot)
+
+    assert all(item.title != "Project charter" for item in view.timeline)
 
 
 def test_durable_assignment_wait_overrides_stale_provider_usage() -> None:

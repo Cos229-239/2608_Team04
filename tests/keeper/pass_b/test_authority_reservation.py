@@ -21,6 +21,7 @@ from keeper.pass_b.launch_authority import TestLaunchAuthority
 from keeper.pass_b.models import (
     AssignmentRecord,
     AttemptRecord,
+    AuthorityReservationReconciliationRecord,
     ExecutionProfileRecord,
     ProviderRecord,
     ProviderSelectionRecord,
@@ -40,6 +41,42 @@ class _SideEffectThenExceptionReservation:
     def reserve(self, prepared: PreparedAuthorityReservation) -> None:
         self.delegate.reserve(prepared)
         raise RuntimeError("simulated response loss after reservation")
+
+
+class _RejectBeforeReservation:
+    def __init__(self, delegate: TestAuthorityAttemptReservation) -> None:
+        self.delegate = delegate
+
+    def prepare(self, *args: object, **kwargs: object) -> PreparedAuthorityReservation:
+        return self.delegate.prepare(*args, **kwargs)  # type: ignore[arg-type]
+
+    def reserve(self, prepared: PreparedAuthorityReservation) -> None:
+        del prepared
+        raise PermissionError("simulated definitive Authority rejection")
+
+    def observe(
+        self, prepared: PreparedAuthorityReservation
+    ) -> dict[str, object]:
+        return self.delegate.observe(prepared)
+
+
+class _AmbiguousBeforeReservation(_RejectBeforeReservation):
+    def reserve(self, prepared: PreparedAuthorityReservation) -> None:
+        del prepared
+        raise RuntimeError("simulated ambiguous transport failure")
+
+
+class _RejectWithPresentObservation(_RejectBeforeReservation):
+    def observe(
+        self, prepared: PreparedAuthorityReservation
+    ) -> dict[str, object]:
+        return {
+            "found": True,
+            "record": {"id": prepared.authority_attempt_id},
+            "service_key_id": "test-authority-key",
+            "service_key_version": 1,
+            "client_sid": "S-1-0-0",
+        }
 
 
 class _SelectionMutationReservation:
@@ -464,6 +501,115 @@ def test_side_effect_then_exception_is_durably_uncertain(
             task_context={},
         )
     assert reservation.reserve_calls == 1
+
+
+def test_authenticated_authority_absence_releases_prelaunch_uncertainty(
+    tmp_path: Path,
+) -> None:
+    application, assignment, workspace_path, reservation = _launch_ready(
+        tmp_path
+    )
+    application.orchestration.authority_reservation = (
+        _RejectBeforeReservation(reservation)
+    )
+    with pytest.raises(PermissionError, match="definitive Authority rejection"):
+        application.orchestration.run_prepared_assignment(
+            assignment.assignment_id,
+            workspace_path,
+            global_context={},
+            task_context={},
+        )
+    attempt = application.repository.list(AttemptRecord)[0]
+    reconciliations = application.repository.list(
+        AuthorityReservationReconciliationRecord,
+        project_id=assignment.project_id,
+    )
+    assert len(reconciliations) == 1
+    reconciled = reconciliations[0]
+    assert isinstance(reconciled, AuthorityReservationReconciliationRecord)
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.FAILED
+    assert application.repository.get(
+        AssignmentRecord, assignment.assignment_id
+    ).state == AssignmentState.CANCELED
+    assert application.repository.get(
+        ProviderSessionRecord, assignment.session_id
+    ).active_assignments == 0
+    workspace = application.repository.list(
+        WorkspaceReservationRecord, project_id=assignment.project_id
+    )[0]
+    assert workspace.state == ReservationState.RELEASED
+    assert application.repository.usage_reservations(
+        assignment.assignment_id
+    )[0]["state"] == "RELEASED"
+    assert application.repository.launch_claim(attempt.attempt_id)[
+        "state"
+    ] == AttemptState.FAILED
+    assert reconciled.authority_attempt_id == attempt.authority_attempt_id
+    assert reconciled.service_key_id == "test-authority-key"
+    assert len(reconciled.observation_digest) == 64
+
+
+def test_authority_absence_reconciliation_rejects_wrong_attempt_identity(
+    tmp_path: Path,
+) -> None:
+    application, assignment, workspace_path, reservation = _launch_ready(
+        tmp_path
+    )
+    application.orchestration.authority_reservation = (
+        _AmbiguousBeforeReservation(reservation)
+    )
+    with pytest.raises(RuntimeError, match="ambiguous transport"):
+        application.orchestration.run_prepared_assignment(
+            assignment.assignment_id,
+            workspace_path,
+            global_context={},
+            task_context={},
+        )
+    attempt = application.repository.list(AttemptRecord)[0]
+
+    with pytest.raises(PermissionError, match="binding is invalid"):
+        application.repository.reconcile_absent_authority_reservation(
+            assignment.assignment_id,
+            attempt_id=attempt.attempt_id,
+            authority_attempt_id="another-authority-attempt",
+            observation_digest="b" * 64,
+            service_key_id="authority-key-1",
+            service_key_version=1,
+            client_sid="S-1-5-21-1001",
+            reconciled_at="2026-07-31T12:49:00+00:00",
+        )
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.UNCERTAIN
+
+
+def test_definitive_rejection_keeps_fence_when_authority_attempt_exists(
+    tmp_path: Path,
+) -> None:
+    application, assignment, workspace_path, reservation = _launch_ready(
+        tmp_path
+    )
+    application.orchestration.authority_reservation = (
+        _RejectWithPresentObservation(reservation)
+    )
+    with pytest.raises(PermissionError):
+        application.orchestration.run_prepared_assignment(
+            assignment.assignment_id,
+            workspace_path,
+            global_context={},
+            task_context={},
+        )
+    attempt = application.repository.list(AttemptRecord)[0]
+
+    assert application.repository.get(
+        AttemptRecord, attempt.attempt_id
+    ).state == AttemptState.UNCERTAIN
+    assert application.repository.list(
+        AuthorityReservationReconciliationRecord,
+        project_id=assignment.project_id,
+    ) == []
 
 
 def test_restart_marks_in_flight_reserved_attempt_uncertain(

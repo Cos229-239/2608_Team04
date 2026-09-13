@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import threading
 from functools import partial
 from pathlib import Path
@@ -10,8 +8,13 @@ from typing import Any
 
 from keeper.authority_service.client import ProductionAuthorityServiceClient
 from keeper.pass_b.application import PassBApplication
+from keeper.pass_b.application import (
+    PassBApplication,
+    authority_exchange_root_from_diagnostics,
+)
 from keeper.pass_b.repository import validate_protected_workspace_tree
 from keeper.ui.theme import THEME, configure_ttk
+from keeper.ui.setup import ProductSetupController, configured_authority_bindings
 from keeper.ui.view_models import SETUP_STEPS, ProductViewModel, build_product_view
 
 
@@ -19,70 +22,6 @@ NAVIGATION = (
     "Home", "Conversation", "Projects", "Workflow",
     "Providers", "Evidence", "Safety", "Settings",
 )
-
-
-class ProductSetupController:
-    def __init__(self, application: Any) -> None:
-        self.application = application
-        self.index = 0
-        self.evidence_directory = str(application.data_directory / "evidence")
-        self.repository = ""
-        routing = application.store.get("settings", "routing") or {}
-        self.provider_policy = str(routing.get("default_provider_policy") or "automatic")
-
-    @property
-    def step(self) -> str:
-        return SETUP_STEPS[self.index][0]
-
-    def back(self) -> str:
-        self.index = max(0, self.index - 1)
-        return self.step
-
-    def next(self) -> str:
-        self._validate()
-        self.index = min(len(SETUP_STEPS) - 1, self.index + 1)
-        return self.step
-
-    def finish(self) -> None:
-        if self.index != len(SETUP_STEPS) - 1:
-            raise ValueError("Complete every setup step before finishing")
-        if self.repository:
-            self.application.add_project(Path(self.repository))
-        self.application.store.upsert(
-            "settings", "routing",
-            {"default_provider_policy": self.provider_policy},
-        )
-        self.application.finish_setup(Path(self.evidence_directory))
-
-    def _validate(self) -> None:
-        if self.step == "storage":
-            selected = Path(self.evidence_directory)
-            validate_protected_workspace_tree(selected, require_exists=False)
-            target = selected.resolve()
-            target.mkdir(parents=True, exist_ok=True)
-            validate_protected_workspace_tree(target)
-            probe: Path | None = None
-            try:
-                descriptor, probe_name = tempfile.mkstemp(
-                    prefix=".keeper-write-probe-",
-                    suffix=".tmp",
-                    dir=target,
-                )
-                probe = Path(probe_name)
-                with os.fdopen(descriptor, "wb") as stream:
-                    stream.write(b"keeper-write-probe")
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                if probe.read_bytes() != b"keeper-write-probe":
-                    raise OSError("evidence-directory write probe failed")
-            finally:
-                if probe is not None:
-                    try:
-                        probe.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-        if self.step == "repository" and self.repository:
-            self.application.git.inspect(Path(self.repository))
 
 
 class KeeperProductDesktop:
@@ -106,7 +45,7 @@ class KeeperProductDesktop:
         self.project_id: str | None = self.pass_b.selected_project_id()
         self.developer_details_enabled = False
         self.root = tk.Tk()
-        self.root.title("DarkSage Keeper — Executive Control Center")
+        self.root.title("Keeper — Executive Control Center")
         self.root.geometry("1440x900")
         self.root.minsize(980, 680)
         configure_ttk(self.root, ttk)
@@ -270,7 +209,7 @@ class KeeperProductDesktop:
         self.home_summary = self._readonly_text(summary, height=16)
         self.home_summary.pack(fill="both", expand=True, padx=14, pady=(0, 8))
         self.sage_label = self.ttk.Label(
-            summary, text="Sage • listening", style="Gold.TLabel",
+            summary, text="Keeper Assistant • listening", style="Gold.TLabel",
         )
         self.sage_label.pack(anchor="w", padx=14)
         self.sage_detail = self.ttk.Label(
@@ -400,7 +339,7 @@ class KeeperProductDesktop:
                 before=self.refresh_button,
             )
         self.sage_label.configure(
-            text=f"Sage • {str(sage['mode']).casefold()} • "
+            text=f"Keeper Assistant • {str(sage['mode']).casefold()} • "
             f"{str(sage['activity_state']).casefold()}"
         )
         self.sage_detail.configure(
@@ -918,7 +857,8 @@ class KeeperProductDesktop:
         self.ttk.Combobox(
             fields, textvariable=provider_policy,
             values=(
-                "automatic", "local-only", "strongest", "ollama",
+                "automatic", "local-only", "strongest", "codex", "claude",
+                "gemini", "qwen",
             ),
             state="readonly",
         ).pack(fill="x", pady=(2, 8))
@@ -1017,17 +957,20 @@ def _desktop_pass_b_application(
     health_client = authority_health_client
     if health_client is None:
         health_client = ProductionAuthorityServiceClient(timeout_seconds=0.25)
-        bindings = () if legacy_path_call else _configured_authority_bindings(application)
+        bindings = () if legacy_path_call else configured_authority_bindings(application)
         if bindings:
             from keeper.pass_b.provider_bridge import bridge_qualified_provider
             from keeper.pass_b.usage_authority import ProductionUsageResetVerifier
 
+            exchange_root = authority_exchange_root_from_diagnostics(
+                health_client.diagnostics()
+            )
             result = PassBApplication(
                 data_directory,
                 authority_client=health_client,
                 authority_health_client=health_client,
                 provider_bindings=bindings,
-                authority_exchange_root=data_directory / "authority-exchange",
+                authority_exchange_root=exchange_root,
                 usage_reset_verifier=ProductionUsageResetVerifier.unavailable(),
             )
             for binding in bindings:
@@ -1039,32 +982,3 @@ def _desktop_pass_b_application(
         data_directory,
         authority_health_client=health_client,
     )
-
-
-def _configured_authority_bindings(
-    application: Any,
-) -> tuple[Any, ...]:
-    from keeper.executive.authority_gateway import AuthorityProviderBinding
-
-    registrations = application.provider_registrations()
-    evidence = application.qualification_evidence()
-    bindings: list[AuthorityProviderBinding] = []
-    for registration in registrations.values():
-        registration_id = registration.get("trusted_registration_id")
-        if not isinstance(registration_id, str) or not registration_id:
-            continue
-        matches = [
-            item
-            for item in evidence.values()
-            if item.get("registration_id") == registration_id
-            and item.get("qualification_result") == "qualified"
-            and isinstance(item.get("id"), str)
-        ]
-        if len(matches) != 1:
-            continue
-        bindings.append(
-            AuthorityProviderBinding(
-                registration_id, str(matches[0]["id"])
-            )
-        )
-    return tuple(bindings)

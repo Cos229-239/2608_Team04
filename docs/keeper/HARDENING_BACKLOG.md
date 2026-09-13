@@ -2,7 +2,8 @@
 
 Nonblocking future work:
 
-- Signed Windows installer and code-signing pipeline.
+- Obtain the organization-controlled trusted Authenticode certificate and use the fail-closed Windows release-signing pipeline. No suitable private-key certificate is installed on the development machine yet.
+- Complete the full install, repair, upgrade, rollback, uninstall, shortcut, service, and first-run matrix on a separate clean Windows computer or reverted VM snapshot.
 - Native macOS and Linux bundles.
 - Rich diff/log widgets and accessibility testing with assistive technology.
 - Optional operating-system notification adapters beyond Windows toast.

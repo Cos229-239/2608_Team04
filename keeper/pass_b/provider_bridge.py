@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any
@@ -161,6 +161,11 @@ def bridge_qualified_provider(
                         or not has_explicit_role_eligibility
                         or "reviewer" in role_eligibility
                     )
+                ),
+                *(
+                    "reviewer"
+                    for role in role_eligibility
+                    if role in {"reviewer", "post_repair_reviewer"}
                 ),
             ]
         )
@@ -462,6 +467,36 @@ def bridge_qualified_provider(
     ):
         raise PermissionError(
             "durable provider qualification declarations changed"
+        )
+    if set(existing.capabilities) != set(provider.capabilities):
+        existing_projection = existing.to_dict()
+        provider_projection = provider.to_dict()
+        for name in ("capabilities", "created_at", "updated_at", "revision"):
+            existing_projection.pop(name, None)
+            provider_projection.pop(name, None)
+        added_capabilities = set(provider.capabilities).difference(
+            existing.capabilities
+        )
+        if (
+            existing_projection != provider_projection
+            or added_capabilities != {"reviewer"}
+            or not set(existing.capabilities).issubset(provider.capabilities)
+            or not reviewer_eligible
+            or "reviewer" not in role_eligibility
+            or registration.get("independence_classification")
+            != "independent-capable"
+        ):
+            raise PermissionError(
+                "durable provider projection changed without exact signed authority"
+            )
+        existing = orchestration.repository.replace(
+            replace(
+                existing,
+                capabilities=provider.capabilities,
+                updated_at=now,
+                revision=existing.revision + 1,
+            ),
+            expected_revision=existing.revision,
         )
     orchestration.attach_adapter(provider_id, adapter)
     return existing

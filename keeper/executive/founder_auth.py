@@ -242,6 +242,11 @@ class ProductionFounderAuthenticator:
     ) -> dict[str, object]:
         return self.__capability_issuer._sign_executive_input_receipt(unsigned)
 
+    def _issue_executive_recovery_receipt(
+        self, unsigned: Mapping[str, object]
+    ) -> dict[str, object]:
+        return self.__capability_issuer._sign_executive_recovery_receipt(unsigned)
+
     def verify_authorization_capability(
         self, value: Mapping[str, object]
     ) -> FounderAuthorizationCapability:
@@ -415,6 +420,11 @@ class TestFounderAuthenticator:
         self, unsigned: Mapping[str, object]
     ) -> dict[str, object]:
         return self.__capability_issuer.sign_executive_input_receipt(unsigned)
+
+    def _issue_executive_recovery_receipt(
+        self, unsigned: Mapping[str, object]
+    ) -> dict[str, object]:
+        return self.__capability_issuer.sign_executive_recovery_receipt(unsigned)
 
 
 FounderAuthenticator = ProductionFounderAuthenticator | TestFounderAuthenticator

@@ -128,7 +128,7 @@ def test_authority_service_package_has_exact_service_closure_and_metadata(
     package = _build(tmp_path)
     verified = verify_service_package(package)
 
-    assert verified.manifest["service_version"] == "1.7.50"
+    assert verified.manifest["service_version"] == "1.7.52"
     assert verified.manifest["protocol_version"] == 7
     assert verified.manifest["service_schema_version"] == 6
     assert verified.manifest["provider_host_protocol"] == "keeper-provider-host/1"

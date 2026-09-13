@@ -332,6 +332,114 @@ class ExecutiveRepository:
                 unsigned
             )
 
+    def issue_uncertain_execution_disposition_receipt(
+        self,
+        action: ProposedAction,
+        *,
+        approval_id: str,
+        authority_attempt_id: str,
+        pass_b_attempt_id: str,
+        assignment_id: str,
+        execution_charter_id: str,
+        execution_charter_revision: int,
+        observation_digest: str,
+    ) -> dict[str, object]:
+        """Sign the exact consumed Founder authority sent to KeeperAuthority."""
+
+        if type(self) not in {
+            ProductionExecutiveRepository,
+            TestExecutiveRepository,
+        }:
+            raise PermissionError(
+                "recovery receipts require an exact Executive repository"
+            )
+        expected_mode = (
+            "PRODUCTION"
+            if type(self) is ProductionExecutiveRepository
+            else "TEST"
+        )
+        current_binding = self.__store.executive_repository_binding()
+        if (
+            self.__mode != expected_mode
+            or current_binding != self.__database_binding
+            or current_binding[1] != expected_mode
+        ):
+            raise PermissionError("Executive recovery repository binding changed")
+        approval = ApprovalRecord.from_dict(
+            self._required("executive_approvals", approval_id)
+        )
+        limits = approval.limits
+        action_binding = limits.get("action_binding")
+        if (
+            approval.consumed_at is None
+            or approval.revoked_at is not None
+            or approval.kind != "ONE_TIME"
+            or approval.action_category != "REPAIR"
+            or approval.project_id != action.project_id
+            or approval.charter_revision != action.charter_revision
+            or approval.source_interaction_id is None
+            or not isinstance(action_binding, dict)
+            or canonical_digest(dict(action_binding.get("action") or {}))
+            != canonical_digest(action.to_dict())
+            or limits.get("action_id") != action.action_id
+            or limits.get("assignment_id") != assignment_id
+            or limits.get("attempt_id") != pass_b_attempt_id
+            or limits.get("authority_attempt_id") != authority_attempt_id
+            or limits.get("execution_charter_id") != execution_charter_id
+            or limits.get("execution_charter_revision")
+            != execution_charter_revision
+            or limits.get("observation_digest") != observation_digest
+            or not isinstance(
+                limits.get("approved_inactivity_observation"), dict
+            )
+            or canonical_digest(
+                dict(limits["approved_inactivity_observation"])
+            )
+            != limits.get("approved_inactivity_observation_digest")
+            or limits.get("possible_external_effect") is not True
+            or limits.get("retry_authorized") is not False
+        ):
+            raise PermissionError(
+                "consumed Founder recovery authority binding is invalid"
+            )
+        unsigned: dict[str, object] = {
+            "schema_version": 1,
+            "kind": "executive_uncertain_execution_disposition_receipt",
+            "receipt_id": f"recovery-receipt:{approval.approval_id}",
+            "database_id": current_binding[3],
+            "recovery_epoch": current_binding[4],
+            "repository_mode": current_binding[1],
+            "approval_id": approval.approval_id,
+            "approval_event_id": approval.source_interaction_id,
+            "founder_identity": approval.approver,
+            "project_id": approval.project_id,
+            "charter_id": approval.charter_id,
+            "charter_revision": approval.charter_revision,
+            "execution_charter_id": execution_charter_id,
+            "execution_charter_revision": execution_charter_revision,
+            "action_id": action.action_id,
+            "action_digest": canonical_digest(action.to_dict()),
+            "authority_attempt_id": authority_attempt_id,
+            "pass_b_attempt_id": pass_b_attempt_id,
+            "assignment_id": assignment_id,
+            "observation_digest": observation_digest,
+            "approved_inactivity_observation": dict(
+                limits["approved_inactivity_observation"]
+            ),
+            "approved_inactivity_observation_digest": limits[
+                "approved_inactivity_observation_digest"
+            ],
+            "possible_external_effect": True,
+            "retry_authorized": False,
+            "consumed_at": approval.consumed_at,
+            # One consumed approval must always reproduce the same signed
+            # receipt so an Authority-success/local-cleanup crash is retryable.
+            "issued_at": approval.consumed_at,
+        }
+        return self._trusted_authenticator()._issue_executive_recovery_receipt(
+            unsigned
+        )
+
     def save_project(
         self,
         project: ProjectRecord,

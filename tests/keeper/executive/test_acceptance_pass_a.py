@@ -20,7 +20,7 @@ from keeper.executive.specialists import (
 from tests.keeper.executive.test_intake_charters import (
     approved_project,
     explicitly_approve,
-    service as test_charter_service,
+    service as _charter_service,
 )
 from tests.keeper.executive.authority_semantics import (
     SemanticAuthorityTransport,
@@ -52,7 +52,7 @@ def test_injected_non_production_authoritative_scenario_a_software_full_delegati
 def test_injected_non_production_authoritative_scenario_b_non_software(
     tmp_path: Path,
 ) -> None:
-    service = test_charter_service(tmp_path)
+    service = _charter_service(tmp_path)
     intake = ConversationIntake.revise(
         ConversationIntake().extract(
             "Research urban gardens and create a sourced final report."

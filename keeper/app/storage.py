@@ -850,6 +850,8 @@ class KeeperStore:
 
     def upsert(self, table: str, identifier: str, payload: dict[str, Any]) -> None:
         _require_table(table)
+        if table == "settings" and identifier.startswith("task_launch_claim:"):
+            raise PermissionError("task launch claims are immutable")
         if table in EXECUTIVE_LIFECYCLE_TABLES:
             raise PermissionError(
                 "Executive lifecycle tables require specialized repository operations"
@@ -858,6 +860,14 @@ class KeeperStore:
         digest = _sha256(serialized.encode("utf-8"))
         timestamp = _now()
         with self.connect() as connection:
+            if table == "tasks":
+                connection.execute("BEGIN IMMEDIATE")
+                claimed = connection.execute(
+                    'SELECT 1 FROM "settings" WHERE id=?',
+                    (f"task_launch_claim:{identifier}",),
+                ).fetchone()
+                if claimed is not None:
+                    raise PermissionError("a claimed task is immutable")
             connection.execute(
                 f'INSERT INTO "{table}" '
                 "(id, schema_version, created_at, updated_at, payload, payload_hash) "
@@ -871,6 +881,10 @@ class KeeperStore:
         self, table: str, identifier: str, payload: dict[str, Any]
     ) -> None:
         _require_table(table)
+        if table == "settings" and identifier.startswith("task_launch_claim:"):
+            raise PermissionError(
+                "task launch claims require the atomic claim operation"
+            )
         if table in EXECUTIVE_LIFECYCLE_TABLES:
             raise PermissionError(
                 "Executive lifecycle tables require specialized repository operations"
@@ -897,6 +911,84 @@ class KeeperStore:
             raise PermissionError(
                 f"immutable {table} record already exists: {identifier}"
             ) from error
+
+    def executive_generation(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT generation FROM executive_write_state WHERE singleton=1"
+            ).fetchone()
+        if row is None or type(row["generation"]) is not int:
+            raise RuntimeError("Executive write generation is unavailable")
+        return int(row["generation"])
+
+    def claim_task_launch(
+        self,
+        task_id: str,
+        expected_task: dict[str, Any],
+        expected_executive_generation: int | None,
+        claim: dict[str, Any],
+    ) -> str:
+        """Atomically bind one launch to an exact task and authority generation."""
+        task_serialized = json.dumps(
+            expected_task, sort_keys=True, separators=(",", ":")
+        )
+        task_digest = _sha256(task_serialized.encode("utf-8"))
+        stored_claim = {
+            **claim,
+            "task_digest": task_digest,
+            "executive_generation": expected_executive_generation,
+        }
+        claim_serialized = json.dumps(
+            stored_claim, sort_keys=True, separators=(",", ":")
+        )
+        claim_digest = _sha256(claim_serialized.encode("utf-8"))
+        timestamp = _now()
+        try:
+            with self.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    'SELECT payload,payload_hash FROM "tasks" WHERE id=?',
+                    (task_id,),
+                ).fetchone()
+                if (
+                    row is None
+                    or row["payload_hash"] != task_digest
+                    or str(row["payload"]) != task_serialized
+                ):
+                    raise PermissionError(
+                        "task changed before its launch could be claimed"
+                    )
+                if expected_executive_generation is not None:
+                    generation = connection.execute(
+                        "SELECT generation FROM executive_write_state "
+                        "WHERE singleton=1"
+                    ).fetchone()
+                    if (
+                        generation is None
+                        or generation["generation"]
+                        != expected_executive_generation
+                    ):
+                        raise PermissionError(
+                            "Keeper charter changed before task launch"
+                        )
+                connection.execute(
+                    'INSERT INTO "settings" '
+                    "(id,schema_version,created_at,updated_at,payload,payload_hash) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        f"task_launch_claim:{task_id}",
+                        SCHEMA_VERSION,
+                        timestamp,
+                        timestamp,
+                        claim_serialized,
+                        claim_digest,
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            raise PermissionError(
+                f"immutable settings record already exists: task_launch_claim:{task_id}"
+            ) from error
+        return task_digest
 
     def get(self, table: str, identifier: str) -> dict[str, Any] | None:
         _require_table(table)
@@ -927,11 +1019,21 @@ class KeeperStore:
 
     def delete(self, table: str, identifier: str) -> None:
         _require_table(table)
+        if table == "settings" and identifier.startswith("task_launch_claim:"):
+            raise PermissionError("task launch claims are immutable")
         if table in EXECUTIVE_LIFECYCLE_TABLES:
             raise PermissionError(
                 "Executive lifecycle tables require specialized repository operations"
             )
         with self.connect() as connection:
+            if table == "tasks":
+                connection.execute("BEGIN IMMEDIATE")
+                claimed = connection.execute(
+                    'SELECT 1 FROM "settings" WHERE id=?',
+                    (f"task_launch_claim:{identifier}",),
+                ).fetchone()
+                if claimed is not None:
+                    raise PermissionError("a claimed task is immutable")
             connection.execute(f'DELETE FROM "{table}" WHERE id=?', (identifier,))
 
     def verify_integrity(self) -> None:

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -560,7 +561,18 @@ def qualification_retry_main(arguments: Sequence[str] | None = None) -> int:
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
     options = parser.parse_args(arguments)
-    identity = verify_reviewed_executable(
+    registration_id = str(options.registration_id)
+    if re.fullmatch(r"keeper-provider:codex:v1:[0-9a-f]{32}", registration_id):
+        executable_verifier = verify_reviewed_executable
+    elif re.fullmatch(
+        r"keeper-provider:claude:v1:[0-9a-f]{32}", registration_id
+    ):
+        from keeper.authority_service.claude_registration import (
+            verify_reviewed_executable as executable_verifier,
+        )
+    else:
+        parser.error("--registration-id is not a supported provider identity")
+    identity = executable_verifier(
         options.executable,
         expected_sha256=options.expected_sha256,
         expected_size=options.expected_size,
@@ -571,7 +583,7 @@ def qualification_retry_main(arguments: Sequence[str] | None = None) -> int:
         return 0
     result = retry_qualification_once(
         ProductionAuthorityServiceClient(),
-        str(options.registration_id),
+        registration_id,
         str(options.retry_qualification_id),
         options.executable,
         options.output_directory,

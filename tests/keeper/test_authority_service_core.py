@@ -10,6 +10,7 @@ from threading import Event
 from typing import Any, cast
 
 import pytest
+import keeper.authority_service.core as authority_core_module
 
 from tests.keeper.authority_testkit import provider_authority_kwargs
 
@@ -30,7 +31,10 @@ from keeper.authority_service.protocol import (
     parse_request,
 )
 from keeper.authority_service.store import AuthorityStore
-from keeper.executive.founder_capability import TestFounderCapabilityVerifier
+from keeper.executive.founder_capability import (
+    TestFounderCapabilityIssuer,
+    TestFounderCapabilityVerifier,
+)
 from tests.keeper.authority_testkit import make_test_founder_capability
 
 
@@ -73,6 +77,26 @@ def test_schema_two_partial_launch_migration_is_restart_safe(
     assert schema_version is not None
     assert schema_version["value"] == "6"
     assert launch_table is not None
+
+
+def test_authority_binds_and_reconciles_executive_repository_identity(
+    tmp_path: Path,
+) -> None:
+    store = AuthorityStore(tmp_path / "authority.db")
+    store.migrate()
+    sid = "S-1-5-21-1000"
+
+    assert store.assert_or_bind_executive_identity(sid, "database-live", 0) == {
+        "client_sid": sid,
+        "database_id": "database-live",
+        "recovery_epoch": 0,
+    }
+    with pytest.raises(PermissionError, match="reconciled state"):
+        store.assert_or_bind_executive_identity(sid, "database-copy", 0)
+    assert store.reconcile_executive_identity(
+        sid, "database-live", 0, "database-restored", 1
+    )["recovery_epoch"] == 1
+    store.assert_or_bind_executive_identity(sid, "database-restored", 1)
 
 
 class _Observer:
@@ -147,6 +171,218 @@ def _service(tmp_path: Path) -> tuple[AuthorityServiceCore, AuthorityServiceClie
         test_transport=lambda request: core.dispatch(request, "S-1-5-21-1000")
     )
     return core, client
+
+
+class _RecoveryHostGateway:
+    def __init__(self, launches: list[dict[str, object]]) -> None:
+        self.launches = launches
+        self.barrier_generation = 0
+
+    def recovery_barrier(self) -> dict[str, object]:
+        self.barrier_generation += 1
+        serialized = json.dumps(
+            self.launches, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return {
+            "state": "READY",
+            "host_id": "host-recovery-test",
+            "launch_journal": {
+                "launches": self.launches,
+                "summary_digest": hashlib.sha256(serialized).hexdigest(),
+                "recovery_barrier_generation": self.barrier_generation,
+            },
+        }
+
+
+class _RecoveryEnrollment:
+    class _Store:
+        def current_provider_host_enrollment(self) -> dict[str, object]:
+            return {
+                "service_state": "ACTIVE",
+                "enrollment_id": "provider-host-enrollment:test",
+                "enrollment_generation": 1,
+            }
+
+    store = _Store()
+
+    def status(self) -> dict[str, object]:
+        return {
+            "enrollment_id": "provider-host-enrollment:test",
+            "enrollment_generation": 1,
+        }
+
+    def validate_completed_enrollment_record(
+        self,
+        record: object,
+        *,
+        expected_enrollment_id: str,
+    ) -> dict[str, dict[str, object]]:
+        del record, expected_enrollment_id
+        return {"proposal": {"host_id": "host-recovery-test"}}
+
+
+def test_uncertain_attempt_observation_requires_exact_host_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core, client = _service(tmp_path)
+    attempt_id = "provider-attempt:uncertain-test"
+    launch_id = "launch-uncertain-test"
+    core.store.insert(
+        "registrations",
+        "registration-test",
+        "QUALIFIED",
+        {"id": "registration-test"},
+    )
+    core.store.insert(
+        "attempts",
+        attempt_id,
+        "UNCERTAIN",
+        {
+            "id": attempt_id,
+            "kind": "provider_launch_claim",
+            "project_id": "project-recovery-test",
+            "charter_id": "charter-recovery-test",
+            "charter_revision": 2,
+            "task_id": "assignment-recovery-test",
+            "authorized_client_sid": "S-1-5-21-1000",
+            "launch_claim_state": "UNCERTAIN",
+            "claim_transaction_id": launch_id,
+        },
+        registration_id="registration-test",
+        run_id="run-test",
+        attempt_number=1,
+        challenge="challenge-test",
+    )
+    gateway = _RecoveryHostGateway([])
+    cast(Any, core.observer).provider_host_gateway = gateway
+    monkeypatch.setattr(
+        core,
+        "_provider_host_enrollment_coordinator",
+        lambda: _RecoveryEnrollment(),
+    )
+
+    result = client.observe_uncertain_provider_attempt(attempt_id)
+    observation = result["observation"]
+    assert observation["authority_attempt_id"] == attempt_id
+    assert observation["launch_id"] == launch_id
+    assert observation["disposition_readiness"] == "EXACT_ATTEMPT_INACTIVE"
+    assert client.verify(
+        "uncertain-provider-attempt-observation", observation
+    )
+
+    gateway.launches = [
+        {
+            "authority_attempt_id": attempt_id,
+            "launch_id": launch_id,
+        }
+    ]
+    with pytest.raises(PermissionError, match="inactivity is not proven"):
+        client.observe_uncertain_provider_attempt(attempt_id)
+
+
+def test_founder_disposition_is_terminalized_by_authority_before_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core, client = _service(tmp_path)
+    attempt_id = "provider-attempt:founder-disposition"
+    core.store.insert(
+        "registrations",
+        "registration-disposition",
+        "QUALIFIED",
+        {"id": "registration-disposition"},
+    )
+    core.store.insert(
+        "attempts",
+        attempt_id,
+        "UNCERTAIN",
+        {
+            "id": attempt_id,
+            "kind": "provider_launch_claim",
+            "project_id": "project-recovery-test",
+            "charter_id": "charter-recovery-test",
+            "charter_revision": 1,
+            "task_id": "assignment-recovery-test",
+            "authorized_client_sid": "S-1-5-21-1000",
+            "launch_claim_state": "UNCERTAIN",
+            "claim_transaction_id": "launch-founder-disposition",
+        },
+        registration_id="registration-disposition",
+        run_id="run-founder-disposition",
+        attempt_number=1,
+        challenge="challenge-founder-disposition",
+    )
+    cast(Any, core.observer).provider_host_gateway = _RecoveryHostGateway([])
+    monkeypatch.setattr(
+        core,
+        "_provider_host_enrollment_coordinator",
+        lambda: _RecoveryEnrollment(),
+    )
+    approved_inactivity = client.observe_uncertain_provider_attempt(
+        attempt_id
+    )["observation"]
+    issued_at = datetime.now(UTC).isoformat()
+    executive_receipt = TestFounderCapabilityIssuer().sign_executive_recovery_receipt(
+        {
+            "schema_version": 1,
+            "kind": "executive_uncertain_execution_disposition_receipt",
+            "receipt_id": "recovery-receipt:approval-test",
+            "database_id": "executive-database-test",
+            "recovery_epoch": 0,
+            "repository_mode": "TEST",
+            "approval_id": "approval-test",
+            "approval_event_id": "approval-event-test",
+            "founder_identity": "S-1-5-21-1000",
+            "project_id": "project-recovery-test",
+            "charter_id": "charter-current-recovery-test",
+            "charter_revision": 2,
+            "execution_charter_id": "charter-recovery-test",
+            "execution_charter_revision": 1,
+            "action_id": "pass-b-dispose-uncertain-execution:test",
+            "action_digest": "a" * 64,
+            "authority_attempt_id": attempt_id,
+            "pass_b_attempt_id": "pass-b-attempt-test",
+            "assignment_id": "assignment-recovery-test",
+            "observation_digest": "b" * 64,
+            "approved_inactivity_observation": approved_inactivity,
+            "approved_inactivity_observation_digest": hashlib.sha256(
+                json.dumps(
+                    approved_inactivity,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            "possible_external_effect": True,
+            "retry_authorized": False,
+            "consumed_at": issued_at,
+            "issued_at": issued_at,
+        }
+    )
+
+    first = client.finalize_uncertain_provider_attempt_disposition(
+        attempt_id, executive_receipt
+    )["disposition"]
+    repeated = client.finalize_uncertain_provider_attempt_disposition(
+        attempt_id, executive_receipt
+    )["disposition"]
+
+    assert repeated == first
+    assert first["terminal_disposition"] == (
+        "FOUNDER_ABANDONED_UNCERTAIN_EXTERNAL_EXECUTION"
+    )
+    assert first["possible_external_effect_preserved"] is True
+    assert first["retry_authorized"] is False
+    assert first["charter_id"] == "charter-recovery-test"
+    assert first["charter_revision"] == 1
+    assert first["approval_charter_id"] == "charter-current-recovery-test"
+    assert first["approval_charter_revision"] == 2
+    assert first["approved_inactivity_observation"][
+        "recovery_barrier_generation"
+    ] == 1
+    assert first["inactivity_observation"]["recovery_barrier_generation"] == 2
+    assert client.verify("uncertain-provider-attempt-disposition", first)
+    assert client.query_state("attempts", attempt_id)["record"][
+        "service_state"
+    ] == "FOUNDER_DISPOSITIONED"
 
 
 def _launch_authority(
@@ -293,6 +529,68 @@ def test_service_constructs_qualification_and_completion_records(
     finalized = client.finalize_completion(attempt_id)
     assert finalized["completion"]["terminal_disposition"] == "COMPLETED"
     assert core.keys.verify("provider-completion", finalized["completion"])
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "model_id"),
+    [("gemini", "gemini-2.5-pro"), ("qwen", "qwen3-coder:30b")],
+)
+def test_authority_registers_and_qualifies_governed_review_providers(
+    tmp_path: Path, provider_id: str, model_id: str
+) -> None:
+    core, client = _service(tmp_path)
+    executable = tmp_path / "controlled-provider.exe"
+
+    registered = client.register_provider(
+        provider_id, executable, **provider_authority_kwargs(provider_id)
+    )
+    qualified = client.qualify_provider(str(registered["registration_id"]))
+
+    registration = qualified["registration"]
+    assert registration["logical_provider_id"] == provider_id
+    assert registration["model_or_service_identity"] == model_id
+    assert registration["registration_lifecycle"] == "QUALIFIED"
+    assert core.keys.verify("provider-qualification", qualified["qualification"])
+
+
+def test_generic_qualification_resumes_exact_started_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core, client = _service(tmp_path)
+    executable = tmp_path / "controlled-provider.exe"
+    registration_id = str(
+        client.register_provider(
+            "qwen", executable, **provider_authority_kwargs("qwen")
+        )["registration_id"]
+    )
+    original_apply = authority_core_module.apply_protected_qualification
+
+    def interrupt_after_observation(*args: object, **kwargs: object) -> dict[str, Any]:
+        raise RuntimeError("simulated interruption after provider observation")
+
+    monkeypatch.setattr(
+        authority_core_module,
+        "apply_protected_qualification",
+        interrupt_after_observation,
+    )
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        client.qualify_provider(registration_id)
+
+    pending = [
+        item
+        for item in core.store.list_records("qualifications")
+        if item["service_state"] == "EXECUTION_STARTED"
+    ]
+    assert len(pending) == 1
+    qualification_id = pending[0]["start"]["id"].removesuffix(":started")
+
+    monkeypatch.setattr(
+        authority_core_module, "apply_protected_qualification", original_apply
+    )
+    recovered = client.qualify_provider(registration_id)
+
+    assert recovered["qualification"]["id"] == qualification_id
+    assert recovered["registration"]["registration_lifecycle"] == "QUALIFIED"
 
 
 def test_cancel_claim_precedes_side_effect_and_blocks_stale_resume(

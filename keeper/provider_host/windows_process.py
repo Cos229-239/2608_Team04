@@ -87,6 +87,7 @@ class ProviderProcessLauncher:
                         on_resumed=on_resumed,
                         integrity_level="medium",
                         validated_executable_identity=measurement,
+                        executable_provider_id=str(envelope["provider_id"]),
                         active_process_limit=int(limits["active_process_limit"]),
                         memory_bytes=int(limits["memory_bytes"]),
                         stdout_bytes=int(limits["stdout_bytes"]),
@@ -211,6 +212,7 @@ class CodexSetupRunner:
                             on_resumed=version_resumed,
                             integrity_level="medium",
                             validated_executable_identity=measurement,
+                            executable_provider_id=provider_id,
                             active_process_limit=int(limits["active_process_limit"]),
                             memory_bytes=int(limits["memory_bytes"]),
                             stdout_bytes=int(limits["stdout_bytes"]),
@@ -261,6 +263,7 @@ class CodexSetupRunner:
                             ),
                             integrity_level="medium",
                             validated_executable_identity=measurement,
+                            executable_provider_id=provider_id,
                             active_process_limit=int(limits["active_process_limit"]),
                             memory_bytes=int(limits["memory_bytes"]),
                             stdout_bytes=int(limits["stdout_bytes"]),
@@ -410,6 +413,7 @@ class CodexSetupRunner:
                                 cancel_requested=cancel_requested,
                                 integrity_level="medium",
                                 validated_executable_identity=measurement,
+                                executable_provider_id=provider_id,
                                 active_process_limit=int(
                                     limits["active_process_limit"]
                                 ),
