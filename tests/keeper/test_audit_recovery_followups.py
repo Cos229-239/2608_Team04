@@ -216,3 +216,14 @@ def test_controller_refresh_does_not_recover_and_counts_global_uncertainty(tmp_p
         controller.selectProject(selected)
         assert controller.state_snapshot()["counts"]["uncertain"] == 1
         assert controller.state_snapshot()["counts"]["projectUncertain"] == 0
+
+
+def test_charter_summary_shows_recorded_request_and_missing_fields():
+    pytest.importorskip("PySide6")
+    from keeper.ui_qml.controller import _charter_summary
+    result = _charter_summary({"problem_or_opportunity": "Do not push or deploy.", "deliverables": ["Checklist"], "success_criteria": ["Readable"], "constraints": []})
+    assert "Do not push or deploy." in result
+    assert "Deliverables: Checklist" in result
+    assert "Success criteria: Readable" in result
+    assert "Constraints: Not recorded" in result
+    assert "not permission to act" in result

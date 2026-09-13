@@ -95,6 +95,13 @@ def test_intake_proposes_full_delegation_for_conversation_first_projects() -> No
 
     assert result.explicit("delegation_mode") == "FULL_DELEGATION"
     assert result.fields["delegation_mode"].provenance == "PROPOSED_ASSUMPTION"
+
+
+def test_intake_preserves_dotted_names_inside_negative_constraints() -> None:
+    result = ConversationIntake().extract(
+        "Do not edit config.json or remove .git. Success: tests pass."
+    )
+    assert result.fields["constraints"].value == ("Do not edit config.json or remove .git",)
     assert any(
         "inside its approved boundaries" in assumption
         for assumption in result.proposed_assumptions
@@ -150,6 +157,22 @@ def test_intake_accepts_colons_after_natural_are_and_is_phrasing() -> None:
     )
     assert result.fields["target_audience"].value == "Devon"
     assert result.fields["approved_providers"].value == ("codex", "claude")
+
+
+@pytest.mark.parametrize("prefix", ["Success:", "Success is", "Success criteria:"])
+def test_intake_preserves_combined_prohibitions_and_short_success(prefix: str) -> None:
+    result = ConversationIntake().extract(
+        "Create an audit-only checklist. Do not execute any provider, commit, push, or deploy. "
+        f"Audience: local tester. {prefix} a readable checklist."
+    )
+    assert result.fields["success_criteria"].value == ("a readable checklist",)
+    assert result.fields["constraints"].value == (
+        "Do not execute any provider, commit, push, or deploy",
+    )
+    assert result.fields["constraints"].provenance == "EXPLICIT"
+    assert result.fields["target_audience"].value == "local tester"
+    assert "approved_providers" not in result.fields
+    assert result.fields["delegation_mode"].provenance == "PROPOSED_ASSUMPTION"
 
 
 def test_revision_replaces_assumption_and_removes_deliverable(tmp_path: Path) -> None:

@@ -21,6 +21,29 @@ from keeper.ui_qml.composition import (
 from keeper.ui.view_models import ProductViewModel, build_product_view
 
 
+def _charter_summary(charter: dict[str, Any]) -> str:
+    """Display recorded scope, not invented defaults or approval authority."""
+    if not charter:
+        return "No charter recorded. Describe a project in Keeper to begin."
+    public = _public_record(charter)
+    fields = (
+        ("Recorded request", "problem_or_opportunity"),
+        ("Desired outcome", "desired_outcome"),
+        ("Deliverables", "deliverables"),
+        ("Success criteria", "success_criteria"),
+        ("Exclusions", "non_goals"),
+        ("Constraints", "constraints"),
+        ("Open questions", "unresolved_questions"),
+    )
+    lines = ["Recorded charter details — missing fields are not permission to act."]
+    for label, key in fields:
+        value = public.get(key)
+        if isinstance(value, (list, tuple)):
+            value = "; ".join(str(item) for item in value)
+        lines.append(f"{label}: {value or 'Not recorded'}")
+    return "\n\n".join(lines)
+
+
 NAVIGATION: tuple[str, ...] = (
     "Overview",
     "Keeper",
@@ -463,6 +486,7 @@ class KeeperDesktopController(QObject):
                 "cards": view.project_cards,
                 "catalog": view.project_catalog,
                 "charter": view.charter_detail,
+                "charterSummary": _charter_summary(view.charter_detail),
                 "approvalCharter": view.approval_charter_detail,
                 "approvalRequired": view.approval_required,
             },

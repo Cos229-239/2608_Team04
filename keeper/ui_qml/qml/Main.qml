@@ -957,8 +957,21 @@ ApplicationWindow {
                                 SectionTitle { text: "CURRENT CHARTER" }
                                 BodyText { text: window.text(keeper.state.project ? keeper.state.project.title : "", "No current charter"); font.pixelSize: 21; font.weight: Font.DemiBold }
                                 MutedText { text: keeper.state.project && keeper.state.project.charterRevision ? "Revision " + keeper.state.project.charterRevision : "A charter has not been approved." }
-                                BodyText { Layout.fillWidth: true; text: keeper.state.project && keeper.state.project.charter && keeper.state.project.charter.objective ? keeper.state.project.charter.objective : "The approved scope, exclusions, constraints, providers, and delegated envelope appear here." }
-                                Item { Layout.fillHeight: true }
+                                ScrollView {
+                                    id: charterScopeScroll
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    clip: true
+                                    contentWidth: availableWidth
+                                    TextArea {
+                                        objectName: "projectCharterSummary"
+                                        width: charterScopeScroll.availableWidth
+                                        readOnly: true; selectByMouse: true
+                                        text: keeper.state.project ? keeper.state.project.charterSummary || "No charter recorded." : "No charter recorded."
+                                        color: textPrimary; wrapMode: TextEdit.Wrap
+                                        textFormat: TextEdit.PlainText
+                                        background: Rectangle { color: "transparent" }
+                                    }
+                                }
                                 RowLayout { QuietButton { text: "Discuss / Revise"; onClicked: window.openAssistant() } GoldButton { objectName: "approveCharterButton"; visible: keeper.state.project && keeper.state.project.approvalRequired; text: "Review & Approve Charter"; onClicked: charterDialog.open() } }
                             }
                         }
