@@ -90,7 +90,7 @@ The following do not block Keeper 1.0 personal-use release:
   database and its integrity records outside the restore workflow;
 - malicious kernel, driver, hypervisor, or operating-system compromise;
 - physical compromise of the Founder computer;
-- theft of Founder Windows credentials;
+- theft of the Keeper Founder authorization credentials;
 - arbitrary code execution under the Founder account outside approved Keeper
   provider isolation; and
 - unsupported third-party plugins loaded into the trusted process.

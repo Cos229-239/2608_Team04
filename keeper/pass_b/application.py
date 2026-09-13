@@ -444,6 +444,8 @@ class PassBApplication:
         *,
         expected_charter_id: str | None = None,
         expected_charter_revision: int | None = None,
+        founder_username: str | None = None,
+        founder_password: str | None = None,
     ) -> dict[str, Any]:
         if type(self.executive) is not KeeperExecutive:
             raise RuntimeError(
@@ -520,7 +522,11 @@ class PassBApplication:
                 raise PermissionError(
                     "Founder challenge does not match the displayed charter"
                 )
-            confirmation = self.executive.authenticate_founder(challenge)
+            confirmation = self.executive.authenticate_founder(
+                challenge,
+                username=founder_username,
+                password=founder_password,
+            )
             charter, approval, event = (
                 self.executive.confirm_charter_approval(
                     challenge.challenge_id, confirmation
