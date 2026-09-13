@@ -542,23 +542,41 @@ ApplicationWindow {
                         spacing: 3
                         Repeater {
                             model: keeper.state.navigation || []
-                            delegate: Button {
-                                id: navButton
-                                objectName: "nav" + modelData.replace(/ /g, "")
+                            delegate: Item {
                                 required property string modelData
                                 Layout.fillWidth: true
-                                implicitHeight: 39
-                                text: modelData
-                                checkable: true
-                                checked: keeper.currentPage === modelData
-                                onClicked: keeper.navigate(modelData)
-                                contentItem: Text { text: navButton.text; color: navButton.checked ? goldBright : textPrimary; font.pixelSize: 13; font.weight: navButton.checked ? Font.DemiBold : Font.Normal; verticalAlignment: Text.AlignVCenter; leftPadding: 14 }
-                                background: Rectangle { radius: 5; color: navButton.checked ? "#382B0F" : (navButton.hovered ? "#191B1A" : "transparent"); border.color: navButton.checked ? goldDim : "transparent" }
+                                implicitHeight: navColumn.implicitHeight
+                                ColumnLayout {
+                                    id: navColumn
+                                    width: parent.width
+                                    spacing: 2
+                                    Text {
+                                        visible: ["Overview", "Projects", "Authorizations"].indexOf(modelData) >= 0
+                                        text: modelData === "Overview" ? "COMMAND" : (modelData === "Projects" ? "WORK" : "TRUST & RECOVERY")
+                                        color: gold
+                                        font.pixelSize: 10
+                                        font.weight: Font.Bold
+                                        leftPadding: 8
+                                        topPadding: modelData === "Overview" ? 4 : 12
+                                    }
+                                    Button {
+                                        id: navButton
+                                        objectName: "nav" + modelData.replace(/ /g, "")
+                                        Layout.fillWidth: true
+                                        implicitHeight: 39
+                                        text: modelData
+                                        checkable: true
+                                        checked: keeper.currentPage === modelData
+                                        onClicked: keeper.navigate(modelData)
+                                        contentItem: Text { text: navButton.text; color: navButton.checked ? goldBright : textPrimary; font.pixelSize: 13; font.weight: navButton.checked ? Font.DemiBold : Font.Normal; verticalAlignment: Text.AlignVCenter; leftPadding: 14 }
+                                        background: Rectangle { radius: 5; color: navButton.checked ? "#382B0F" : (navButton.hovered ? "#191B1A" : "transparent"); border.color: navButton.checked ? goldDim : "transparent" }
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: border }
+                Rectangle { Layout.fillWidth: true; height: 1; color: border }
                 RowLayout {
                     Layout.fillWidth: true
                     Rectangle { Layout.preferredWidth: 10; Layout.preferredHeight: 10; radius: 5; color: statusColor(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "UNAVAILABLE") }
@@ -1220,6 +1238,7 @@ ApplicationWindow {
                                 RowLayout { Layout.fillWidth: true; ColumnLayout { Layout.fillWidth: true; BodyText { text: "Local-only mode" } MutedText { text: "No provider is selected automatically and paid fallback is disabled." } } Switch { checked: true; enabled: false } }
                                 RowLayout { Layout.fillWidth: true; ColumnLayout { Layout.fillWidth: true; BodyText { text: "Show developer details" } MutedText { text: "Expose durable IDs and diagnostics; protected paths remain redacted." } } Switch { checked: keeper.state.settings ? keeper.state.settings.developerDetails : false; onToggled: keeper.setDeveloperDetails(checked) } }
                             }
+                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 150; SectionTitle { text: "KEEPER AUTHORIZATION ACCOUNT" } MutedText { Layout.fillWidth: true; text: "Create or replace the account used for Founder approvals. This is separate from your Windows login."; wrapMode: Text.Wrap } RowLayout { Layout.fillWidth: true; QuietButton { text: "Manage account"; onClicked: founderAccountDialog.open() } } }
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 390; SectionTitle { text: "PATHS" }
                                 BodyText { text: "Evidence directory" }
                                 RowLayout { Layout.fillWidth: true; MutedText { Layout.fillWidth: true; text: keeper.state.settings ? keeper.state.settings.evidenceDirectory : "Not configured" } QuietButton { text: "Change…"; onClicked: { folderDialog.mode = "settingsEvidence"; folderDialog.open() } } }
@@ -1356,12 +1375,11 @@ ApplicationWindow {
             spacing: 14
             Image { Layout.alignment: Qt.AlignHCenter; source: keeperIcon; sourceSize.width: 100; sourceSize.height: 100; Layout.preferredWidth: 100; Layout.preferredHeight: 100 }
             Text { Layout.alignment: Qt.AlignHCenter; text: "Approve Project Charter"; color: goldBright; font.pixelSize: 23; font.weight: Font.Bold }
-            BodyText { Layout.fillWidth: true; text: window.text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
-            MutedText { Layout.fillWidth: true; text: "Revision " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.revision : "", "unknown") + "  •  Mode: " + window.currentDelegationMode(); horizontalAlignment: Text.AlignHCenter }
-            MutedText { Layout.fillWidth: true; text: "Approved providers: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.approved_providers : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
-            MutedText { Layout.fillWidth: true; text: "Constraints: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.constraints : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
-            MutedText { Layout.fillWidth: true; text: "After authentication, Keeper chooses the safest effective plan and keeps the project moving inside this charter without asking you to manage tasks or workflows."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
-            RowLayout { Layout.alignment: Qt.AlignHCenter; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; onClicked: { charterDialog.close(); keeper.approveCurrentCharter() } } }
+            BodyText { Layout.fillWidth: true; text: text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
+            MutedText { Layout.fillWidth: true; text: "Use the Keeper authorization account created in Settings. Your Windows password is never requested or sent to Keeper."; horizontalAlignment: Text.AlignHCenter }
+            TextField { id: approvalUsername; objectName: "approvalUsername"; Layout.fillWidth: true; placeholderText: "Keeper authorization username"; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
+            TextField { id: approvalPassword; objectName: "approvalPassword"; Layout.fillWidth: true; placeholderText: "Keeper authorization password"; echoMode: TextInput.Password; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
+            RowLayout { Layout.alignment: Qt.AlignHCenter; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; enabled: approvalUsername.text.length > 0 && approvalPassword.text.length > 0; onClicked: { keeper.approveCurrentCharter(approvalUsername.text, approvalPassword.text); approvalPassword.clear(); charterDialog.close() } } }
         }
     }
 
@@ -1394,7 +1412,27 @@ ApplicationWindow {
     }
 
     Dialog {
-        id: taskDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Create a Task"; standardButtons: Dialog.NoButton
+        id: founderAccountDialog
+        objectName: "founderAccountDialog"
+        anchors.centerIn: parent
+        width: Math.min(560, window.width - 80)
+        modal: true
+        title: "Keeper Authorization Account"
+        standardButtons: Dialog.NoButton
+        background: Rectangle { color: panelRaised; border.color: gold; radius: 8 }
+        contentItem: ColumnLayout {
+            spacing: 12
+            BodyText { Layout.fillWidth: true; text: "This account authorizes exact Keeper charter approvals. Keep it distinct from the Windows account used to sign in to the computer."; wrapMode: Text.Wrap }
+            TextField { id: founderAccountUsername; objectName: "founderAccountUsername"; Layout.fillWidth: true; placeholderText: "Username (3-64 letters, numbers, . _ -)"; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
+            TextField { id: founderAccountPassword; objectName: "founderAccountPassword"; Layout.fillWidth: true; placeholderText: "Password (at least 12 characters)"; echoMode: TextInput.Password; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
+            TextField { id: founderAccountConfirmation; objectName: "founderAccountConfirmation"; Layout.fillWidth: true; placeholderText: "Confirm password"; echoMode: TextInput.Password; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
+            MutedText { Layout.fillWidth: true; text: "Keeper stores only a salted password verifier. The password is cleared from the dialog after submission."; wrapMode: Text.Wrap }
+            RowLayout { Layout.alignment: Qt.AlignRight; QuietButton { text: "Cancel"; onClicked: founderAccountDialog.close() } GoldButton { objectName: "saveFounderAccount"; text: "Save Keeper account"; enabled: founderAccountUsername.text.length > 0 && founderAccountPassword.text.length >= 12 && founderAccountPassword.text === founderAccountConfirmation.text; onClicked: { keeper.configureFounderAccount(founderAccountUsername.text, founderAccountPassword.text); founderAccountPassword.clear(); founderAccountConfirmation.clear(); founderAccountDialog.close() } } }
+        }
+    }
+
+    Dialog {
+        id: taskDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Create Bounded Task"; standardButtons: Dialog.NoButton
         background: Rectangle { color: panelRaised; border.color: goldDim; radius: 7 }
         contentItem: ColumnLayout { spacing: 9; MutedText { Layout.fillWidth: true; text: "Tell Keeper what you want done. Keeper will use the current repository and create a safe local branch for you."; wrapMode: Text.WordWrap } BodyText { text: "Task name" } TextField { id: taskTitle; Layout.fillWidth: true; placeholderText: "Example: Clean up the workflow screen"; color: textPrimary; background: Rectangle { color: "#111111"; border.color: "#444444" } } BodyText { text: "What should Keeper do?" } TextArea { id: taskObjective; Layout.fillWidth: true; Layout.preferredHeight: 110; placeholderText: "Describe the result you want and anything Keeper must not change."; color: textPrimary; wrapMode: TextEdit.Wrap; background: Rectangle { color: "#111111"; border.color: "#444444" } } MutedText { Layout.fillWidth: true; text: "Nothing will be committed, pushed, deployed, published, or purchased without your approval."; color: warning; wrapMode: Text.WordWrap } RowLayout { Layout.alignment: Qt.AlignRight; QuietButton { text: "Cancel"; onClicked: taskDialog.close() } GoldButton { objectName: "confirmCreateTask"; text: "Add Task"; enabled: taskTitle.text.trim().length > 0 && taskObjective.text.trim().length > 0; onClicked: { keeper.createSimpleTask(taskTitle.text, taskObjective.text); taskDialog.close() } } } }
     }

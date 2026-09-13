@@ -656,8 +656,8 @@ class KeeperDesktopController(QObject):
 
         self._run(f"{selected} selected as the primary agent", save)
 
-    @Slot()
-    def approveCurrentCharter(self) -> None:
+    @Slot(str, str)
+    def approveCurrentCharter(self, username: str = "", password: str = "") -> None:
         project_id = self.pass_b.selected_project_id()
         approval = self._state.get("project", {}).get("approvalCharter", {})
         if not project_id or not approval:
@@ -677,6 +677,17 @@ class KeeperDesktopController(QObject):
                     project_id,
                     expected_charter_id=str(approval.get("charter_id")),
                     expected_charter_revision=int(approval.get("revision")),
+                founder_username=username,
+                founder_password=password,
+            ),
+        )
+
+    @Slot(str, str)
+    def configureFounderAccount(self, username: str, password: str) -> None:
+        self._run(
+            "Keeper Founder account configured",
+            lambda: self.pass_b.executive.configure_founder_account(
+                username.strip(), password
                 )
                 charter = outcome.get("charter", {})
                 mode = str(charter.get("delegation_mode", "ADVISORY")).upper()

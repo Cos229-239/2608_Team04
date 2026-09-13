@@ -204,12 +204,21 @@ class KeeperExecutive:
         return self.__charters.request_approval(charter)
 
     def authenticate_founder(
-        self, challenge: FounderApprovalChallenge
+        self,
+        challenge: FounderApprovalChallenge,
+        *,
+        username: str | None = None,
+        password: str | None = None,
     ) -> ProductionApprovalConfirmation:
-        confirmation = self.__charters.authenticate(challenge)
+        confirmation = self.__charters.authenticate(
+            challenge, username=username, password=password
+        )
         if type(confirmation) is not ProductionApprovalConfirmation:
             raise RuntimeError("production Founder confirmation type is invalid")
         return confirmation
+
+    def configure_founder_account(self, username: str, password: str) -> None:
+        self.__charters.configure_keeper_account(username, password)
 
     def confirm_charter_approval(
         self,
