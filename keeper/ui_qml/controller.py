@@ -356,7 +356,7 @@ class KeeperDesktopController(QObject):
                 )
             )
         recoveries = [
-            _public_record(item) for item in self.application.recover_runs()
+            _public_record(item) for item in self.application.recovery_records()
         ]
         uncertain_attempts = {
             item.assignment_id: item
