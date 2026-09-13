@@ -61,6 +61,35 @@ def test_recovery_serializes_with_start_publication(tmp_path: Path, monkeypatch)
     assert finished.is_set()
 
 
+@pytest.mark.parametrize("classification,safe,running,stage,expected", [
+    ("recoverable", True, False, "author_execution", "retry"),
+    ("uncertain", True, False, "author_execution", ""),
+    ("recoverable", False, False, "author_execution", ""),
+    ("recoverable", True, True, "author_execution", ""),
+    ("recoverable", True, False, "authorized_push", ""),
+    ("recoverable", True, False, "scope_validation", ""),
+    ("unknown", True, False, "author_execution", ""),
+])
+def test_recovery_action_fails_closed(tmp_path, classification, safe, running, stage, expected):
+    app = KeeperApplication(tmp_path)
+    row = {"id": "r", "status": "interrupted", "stage": "interrupted", "interrupted_from": stage,
+           "recovery": {"classification": classification, "retry_safe": safe, "previous_process_running": running}}
+    assert app.workflow.recovery_action(row) == expected
+
+
+def test_paused_live_worker_resumes_not_retries(tmp_path):
+    app = KeeperApplication(tmp_path)
+    paused = threading.Event()
+    paused.set()
+    thread = Mock()
+    thread.is_alive.return_value = True
+    app.workflow._active["r"] = ActiveRun(thread, threading.Event(), paused, threading.Event())
+    row = {"id": "r", "status": "interrupted", "stage": "interrupted"}
+    assert app.workflow.recovery_action(row) == "resume"
+    row["recovery"] = {"classification": "uncertain"}
+    assert app.workflow.recovery_action(row) == ""
+
+
 def test_worker_start_failure_removes_only_exact_registry_entry(tmp_path):
     app = KeeperApplication(tmp_path)
     thread = Mock()
@@ -95,6 +124,18 @@ def test_retry_launch_failure_remains_available_for_recovery(tmp_path, monkeypat
         app.retry_run("r", "explicit retry")
     assert "r" not in app.workflow._active
     assert app.store.get("runs", "r") is not None
+
+
+def test_stale_retry_cannot_bypass_new_uncertainty(tmp_path):
+    app = KeeperApplication(tmp_path)
+    app.lifecycle.create("r", "task")
+    row = app.store.get("runs", "r")
+    row.update({"stage": "interrupted", "status": "interrupted", "interrupted_from": "author_execution",
+                "recovery": {"classification": "uncertain", "retry_safe": True, "previous_process_running": False}})
+    app.store.upsert("runs", "r", row)
+    with pytest.raises(PermissionError, match="uncertain"):
+        app.retry_run("r", "stale button")
+    assert app.store.get("runs", "r") == row
 
 
 def test_concurrent_retry_and_recovery_wait_for_worker_publication(tmp_path, monkeypatch):
@@ -148,3 +189,30 @@ def test_concurrent_retry_and_recovery_wait_for_worker_publication(tmp_path, mon
         active = app.workflow._active.get("r")
         if active is not None:
             active.thread.join(3)
+
+
+def test_controller_refresh_does_not_recover_and_counts_global_uncertainty(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6")
+    from keeper.ui_qml.controller import KeeperDesktopController
+    app = KeeperApplication(tmp_path)
+    controller = KeeperDesktopController(app, test_fixture=True)
+    app.store.upsert("runs", "foreign-run", {"id": "foreign-run", "task_id": "foreign-task", "status": "interrupted", "recovery": {"classification": "uncertain"}})
+    monkeypatch.setattr(app, "recover_runs", Mock(side_effect=AssertionError("refresh must be read-only")))
+    for _ in range(2):
+        controller.refresh()
+        state = controller.state_snapshot()
+        assert state["counts"]["uncertain"] == 1
+        row = state["recoveries"][0]
+        assert row["run_id"] == "foreign-run"
+        assert row["status"] == "UNCERTAIN"
+        assert row["recovery_action"] == ""
+    controller.sendAssistantMessage("Create a local checklist project.")
+    first = controller.state_snapshot()["project"]["id"]
+    controller.startNewProject()
+    controller.sendAssistantMessage("Create a local notes project.")
+    second = controller.state_snapshot()["project"]["id"]
+    assert first and second and first != second
+    for selected in (first, second):
+        controller.selectProject(selected)
+        assert controller.state_snapshot()["counts"]["uncertain"] == 1
+        assert controller.state_snapshot()["counts"]["projectUncertain"] == 0

@@ -355,9 +355,25 @@ class KeeperDesktopController(QObject):
                     }
                 )
             )
-        recoveries = [
-            _public_record(item) for item in self.application.recovery_records()
-        ]
+        recoveries = []
+        for item in self.application.recovery_records():
+            row = _public_record(item)
+            recovery = item.get("recovery")
+            recovery = recovery if isinstance(recovery, dict) else {}
+            uncertain = (
+                str(item.get("status", "")).upper() == "UNCERTAIN"
+                or str(recovery.get("classification", "")).lower() == "uncertain"
+            )
+            row.update({
+                "run_id": str(item.get("id", "")),
+                "status": "UNCERTAIN" if uncertain else str(item.get("status", "UNKNOWN")).upper(),
+                "recovery_action": "" if uncertain else item.get("recovery_action", ""),
+                "reason": "External outcome uncertain; retry is blocked." if uncertain
+                else "Paused worker can resume." if item.get("recovery_action") == "resume"
+                else "Interrupted stage can be explicitly retried." if item.get("recovery_action") == "retry"
+                else "Recovery requires inspection; no safe action is available.",
+            })
+            recoveries.append(row)
         uncertain_attempts = {
             item.assignment_id: item
             for item in self.pass_b.repository.list(AttemptRecord)
@@ -499,12 +515,13 @@ class KeeperDesktopController(QObject):
                 "providers": len(view.provider_cards),
                 "evidence": len(view.evidence_cards) + len(view.evidence_reference_cards),
                 "uncertain": sum(
-                    1 for row in runs if str(row.get("status", "")).upper() == "UNCERTAIN"
-                ) + len(pass_b_uncertain),
+                    1 for row in recoveries if str(row.get("status", "")).upper() == "UNCERTAIN"
+                ),
                 "projectUncertain": sum(
                     1
-                    for row in runs
-                    if str(row.get("status", "")).upper() == "UNCERTAIN"
+                    for row in recoveries
+                    if row.get("run_id") in scoped_run_ids
+                    and str(row.get("status", "")).upper() == "UNCERTAIN"
                 )
                 + sum(
                     1

@@ -19,7 +19,7 @@ from typing import Any, Callable
 from keeper.agent_runner import AgentRunner
 from keeper.authority_service.client import AuthorityServiceClient
 from keeper.app.git_safety import GitSafetyService
-from keeper.app.lifecycle import RunLifecycle, RunStage
+from keeper.app.lifecycle import RETRYABLE_STAGES, RunLifecycle, RunStage
 from keeper.app.path_safety import validate_path_budget
 from keeper.app.reporting import finalize_evidence
 from keeper.app.storage import KeeperStore
@@ -189,6 +189,26 @@ class WorkflowCoordinator:
                 if active is not None and active.thread is thread:
                     self._active.pop(run_id)
             raise
+
+    def recovery_action(self, record: dict[str, Any]) -> str:
+        """Advisory UI capability only; run actions still revalidate at execution."""
+        recovery = record.get("recovery")
+        recovery = recovery if isinstance(recovery, dict) else {}
+        if (str(record.get("status", "")).lower() == "uncertain"
+                or str(recovery.get("classification", "")).lower() == "uncertain"):
+            return ""
+        with self._lock:
+            active = self._active.get(str(record.get("id", "")))
+            if active is not None:
+                return "resume" if (active.thread.is_alive()
+                                     and active.pause_requested.is_set()) else ""
+        if (record.get("stage") == RunStage.INTERRUPTED.value
+                and record.get("interrupted_from") in {s.value for s in RETRYABLE_STAGES}
+                and recovery.get("retry_safe") is True
+                and recovery.get("previous_process_running") is False
+                and recovery.get("classification") == "recoverable"):
+            return "retry"
+        return ""
 
     @_serialize_recovery
     def recover_interrupted_runs(self) -> list[dict[str, Any]]:
@@ -529,6 +549,11 @@ class WorkflowCoordinator:
             if run_id in self._active:
                 raise RuntimeError("stage retry is already active")
         previous = self._run(run_id)
+        recovery = previous.get("recovery")
+        if (str(previous.get("status", "")).lower() == "uncertain"
+                or (isinstance(recovery, dict)
+                    and str(recovery.get("classification", "")).lower() == "uncertain")):
+            raise PermissionError("uncertain execution cannot be retried")
         expected = (
             previous.get("interrupted_from")
             if previous.get("stage") == RunStage.INTERRUPTED.value
@@ -707,6 +732,11 @@ class WorkflowCoordinator:
     def resume(self, run_id: str) -> None:
         active = self._active_run(run_id)
         record = self._run(run_id)
+        recovery = record.get("recovery")
+        if (str(record.get("status", "")).lower() == "uncertain"
+                or (isinstance(recovery, dict)
+                    and str(recovery.get("classification", "")).lower() == "uncertain")):
+            raise PermissionError("uncertain execution cannot be resumed")
         interrupted = record.get("interrupted_from")
         if not interrupted:
             raise ValueError("run is not paused")

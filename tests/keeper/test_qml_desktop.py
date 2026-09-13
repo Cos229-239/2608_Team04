@@ -637,7 +637,7 @@ def test_qml_search_and_narrow_assistant_are_real_and_source_backed() -> None:
     assert "readonly property bool opened: userOpened" in qml
     assert 'keeper.navigate("Keeper")' in qml
     assert "keeper.startTask(modelData.id)" in qml
-    assert "keeper.runAction(modelData.run_id, \"resume\")" in qml
+    assert "keeper.runAction(modelData.run_id, modelData.recovery_action)" in qml
     assert "keeper.exportRunReport(window.selectedRunId, selectedFile)" in qml
     assert "Math.min(460, Math.max(120, emptyRoot.width - 24))" in qml
     assert 'objectName: "delegatedModeDialog"' in qml

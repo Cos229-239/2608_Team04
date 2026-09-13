@@ -981,7 +981,7 @@ class KeeperApplication:
     def recovery_records(self) -> list[dict[str, Any]]:
         """Read durable recovery state globally, without probing or stopping work."""
         return [
-            record
+            {**record, "recovery_action": self.workflow.recovery_action(record)}
             for record in self.store.list("runs")
             if str(record.get("status", "")).lower() in {"interrupted", "uncertain"}
         ]
