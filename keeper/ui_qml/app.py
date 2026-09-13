@@ -23,7 +23,6 @@ def run_desktop(
     smoke: bool = False,
     screenshot_directory: Path | None = None,
     test_fixture: bool = False,
-    restart_command: list[str] | None = None,
 ) -> int:
     if smoke and "QT_QPA_PLATFORM" not in os.environ:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -40,17 +39,6 @@ def run_desktop(
     qt_app.setWindowIcon(QIcon(str(icon_path)))
     engine = QQmlApplicationEngine()
     controller = KeeperDesktopController(application, test_fixture=test_fixture)
-    command = restart_command or [sys.executable, "-m", "keeper.ui_qml", *sys.argv[1:]]
-
-    def reboot() -> None:
-        from PySide6.QtCore import QProcess
-
-        if not QProcess.startDetached(command[0], command[1:]):
-            controller._fail("Keeper Desktop could not be restarted.")
-            return
-        qt_app.quit()
-
-    controller.rebootRequested.connect(reboot)
     engine.rootContext().setContextProperty("keeper", controller)
     engine.rootContext().setContextProperty(
         "keeperIcon", QUrl.fromLocalFile(str(icon_path))

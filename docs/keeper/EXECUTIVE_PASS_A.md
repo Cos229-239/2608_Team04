@@ -58,8 +58,7 @@ providers, workspaces, privacy, risk, delegation, authority, escalation, review,
 evidence, completion, version, and Founder approval fields.
 
 Charter and protected-action approval are not derived from conversation text.
-Production confirmation uses the Keeper authorization account and a salted
-password verifier to
+Production confirmation uses the Windows credential UI and `LogonUser` to
 authenticate the provisioned desktop principal SID. A non-exportable 3072-bit
 Windows CNG RSA key with forced high-protection UI signs the resulting one-use
 confirmation and the strict Founder authorization capability; KeeperAuthority

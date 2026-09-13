@@ -626,7 +626,6 @@ ApplicationWindow {
                         background: Rectangle { color: "#121414"; radius: 5; border.color: parent.activeFocus ? gold : "#3A3C3B" }
                     }
                     QuietButton { objectName: "refreshButton"; text: "Refresh"; enabled: !keeper.busy; onClicked: keeper.refresh() }
-                    QuietButton { objectName: "rebootButton"; text: "Reboot Desktop"; ToolTip.text: "Restart the desktop and reconcile durable state"; onClicked: rebootDialog.open() }
                     Rectangle { width: 1; height: 34; color: border }
                     ColumnLayout {
                         spacing: 0
@@ -1238,7 +1237,6 @@ ApplicationWindow {
                                 RowLayout { Layout.fillWidth: true; ColumnLayout { Layout.fillWidth: true; BodyText { text: "Local-only mode" } MutedText { text: "No provider is selected automatically and paid fallback is disabled." } } Switch { checked: true; enabled: false } }
                                 RowLayout { Layout.fillWidth: true; ColumnLayout { Layout.fillWidth: true; BodyText { text: "Show developer details" } MutedText { text: "Expose durable IDs and diagnostics; protected paths remain redacted." } } Switch { checked: keeper.state.settings ? keeper.state.settings.developerDetails : false; onToggled: keeper.setDeveloperDetails(checked) } }
                             }
-                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 150; SectionTitle { text: "KEEPER AUTHORIZATION ACCOUNT" } MutedText { Layout.fillWidth: true; text: "Create or replace the account used for Founder approvals. This is separate from your Windows login."; wrapMode: Text.Wrap } RowLayout { Layout.fillWidth: true; QuietButton { text: "Manage account"; onClicked: founderAccountDialog.open() } } }
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 390; SectionTitle { text: "PATHS" }
                                 BodyText { text: "Evidence directory" }
                                 RowLayout { Layout.fillWidth: true; MutedText { Layout.fillWidth: true; text: keeper.state.settings ? keeper.state.settings.evidenceDirectory : "Not configured" } QuietButton { text: "Change…"; onClicked: { folderDialog.mode = "settingsEvidence"; folderDialog.open() } } }
@@ -1310,24 +1308,6 @@ ApplicationWindow {
     }
 
     Dialog {
-        id: rebootDialog
-        objectName: "rebootDialog"
-        anchors.centerIn: parent
-        modal: true
-        title: "Reboot Keeper Desktop"
-        standardButtons: Dialog.Cancel
-        background: Rectangle { color: panelRaised; border.color: goldDim; radius: 8 }
-        contentItem: ColumnLayout {
-            spacing: 12
-            BodyText { Layout.fillWidth: true; text: "Keeper will close and reopen this desktop. Durable state is recovered when it starts again."; wrapMode: Text.Wrap }
-            RowLayout {
-                Layout.alignment: Qt.AlignRight
-                GoldButton { objectName: "confirmReboot"; text: "Reboot"; onClicked: { rebootDialog.close(); keeper.reboot() } }
-            }
-        }
-    }
-
-    Dialog {
         id: narrowAssistantDialog
         objectName: "narrowAssistantDialog"
         anchors.centerIn: parent
@@ -1375,11 +1355,12 @@ ApplicationWindow {
             spacing: 14
             Image { Layout.alignment: Qt.AlignHCenter; source: keeperIcon; sourceSize.width: 100; sourceSize.height: 100; Layout.preferredWidth: 100; Layout.preferredHeight: 100 }
             Text { Layout.alignment: Qt.AlignHCenter; text: "Approve Project Charter"; color: goldBright; font.pixelSize: 23; font.weight: Font.Bold }
-            BodyText { Layout.fillWidth: true; text: text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
-            MutedText { Layout.fillWidth: true; text: "Use the Keeper authorization account created in Settings. Your Windows password is never requested or sent to Keeper."; horizontalAlignment: Text.AlignHCenter }
-            TextField { id: approvalUsername; objectName: "approvalUsername"; Layout.fillWidth: true; placeholderText: "Keeper authorization username"; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
-            TextField { id: approvalPassword; objectName: "approvalPassword"; Layout.fillWidth: true; placeholderText: "Keeper authorization password"; echoMode: TextInput.Password; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
-            RowLayout { Layout.alignment: Qt.AlignHCenter; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; enabled: approvalUsername.text.length > 0 && approvalPassword.text.length > 0; onClicked: { keeper.approveCurrentCharter(approvalUsername.text, approvalPassword.text); approvalPassword.clear(); charterDialog.close() } } }
+            BodyText { Layout.fillWidth: true; text: window.text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
+            MutedText { Layout.fillWidth: true; text: "Revision " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.revision : "", "unknown") + "  •  Mode: " + window.currentDelegationMode(); horizontalAlignment: Text.AlignHCenter }
+            MutedText { Layout.fillWidth: true; text: "Approved providers: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.approved_providers : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            MutedText { Layout.fillWidth: true; text: "Constraints: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.constraints : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            MutedText { Layout.fillWidth: true; text: "After authentication, Keeper chooses the safest effective plan and keeps the project moving inside this charter without asking you to manage tasks or workflows."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            RowLayout { Layout.alignment: Qt.AlignHCenter; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; onClicked: { charterDialog.close(); keeper.approveCurrentCharter() } } }
         }
     }
 
@@ -1409,26 +1390,6 @@ ApplicationWindow {
         id: addRepositoryDialog; anchors.centerIn: parent; width: 620; modal: true; title: "Add Protected Repository"; standardButtons: Dialog.NoButton
         background: Rectangle { color: panelRaised; border.color: goldDim; radius: 7 }
         contentItem: ColumnLayout { spacing: 12; BodyText { text: "Repository name" } TextField { id: repoName; Layout.fillWidth: true; color: textPrimary; background: Rectangle { color: "#111111"; border.color: "#444444" } } BodyText { text: "Local Git repository" } RowLayout { Layout.fillWidth: true; TextField { id: repoPath; Layout.fillWidth: true; color: textPrimary; background: Rectangle { color: "#111111"; border.color: "#444444" } } QuietButton { objectName: "browseRepository"; text: "Browse"; onClicked: { folderDialog.mode = "addRepository"; folderDialog.open() } } } MutedText { text: "Keeper protects the original and uses isolated workspaces for execution." } RowLayout { Layout.alignment: Qt.AlignRight; QuietButton { text: "Cancel"; onClicked: addRepositoryDialog.close() } GoldButton { objectName: "confirmAddRepository"; text: "Add Repository"; enabled: repoPath.text.length > 0; onClicked: { keeper.addRepository(repoPath.text, repoName.text); addRepositoryDialog.close() } } } }
-    }
-
-    Dialog {
-        id: founderAccountDialog
-        objectName: "founderAccountDialog"
-        anchors.centerIn: parent
-        width: Math.min(560, window.width - 80)
-        modal: true
-        title: "Keeper Authorization Account"
-        standardButtons: Dialog.NoButton
-        background: Rectangle { color: panelRaised; border.color: gold; radius: 8 }
-        contentItem: ColumnLayout {
-            spacing: 12
-            BodyText { Layout.fillWidth: true; text: "This account authorizes exact Keeper charter approvals. Keep it distinct from the Windows account used to sign in to the computer."; wrapMode: Text.Wrap }
-            TextField { id: founderAccountUsername; objectName: "founderAccountUsername"; Layout.fillWidth: true; placeholderText: "Username (3-64 letters, numbers, . _ -)"; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
-            TextField { id: founderAccountPassword; objectName: "founderAccountPassword"; Layout.fillWidth: true; placeholderText: "Password (at least 12 characters)"; echoMode: TextInput.Password; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
-            TextField { id: founderAccountConfirmation; objectName: "founderAccountConfirmation"; Layout.fillWidth: true; placeholderText: "Confirm password"; echoMode: TextInput.Password; color: textPrimary; background: Rectangle { color: "#111111"; border.color: parent.activeFocus ? gold : "#444444" } }
-            MutedText { Layout.fillWidth: true; text: "Keeper stores only a salted password verifier. The password is cleared from the dialog after submission."; wrapMode: Text.Wrap }
-            RowLayout { Layout.alignment: Qt.AlignRight; QuietButton { text: "Cancel"; onClicked: founderAccountDialog.close() } GoldButton { objectName: "saveFounderAccount"; text: "Save Keeper account"; enabled: founderAccountUsername.text.length > 0 && founderAccountPassword.text.length >= 12 && founderAccountPassword.text === founderAccountConfirmation.text; onClicked: { keeper.configureFounderAccount(founderAccountUsername.text, founderAccountPassword.text); founderAccountPassword.clear(); founderAccountConfirmation.clear(); founderAccountDialog.close() } } }
-        }
     }
 
     Dialog {

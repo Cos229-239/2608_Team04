@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
-import json
 import os
 import secrets
 import sys
@@ -33,7 +32,6 @@ PROOF_VERSION: Final = 2
 CONFIRMATION_LIFETIME: Final = timedelta(minutes=2)
 ERROR_CANCELLED: Final = 1223
 CREDUIWIN_GENERIC: Final = 0x1
-KEEPER_PASSWORD_ITERATIONS: Final = 600_000
 
 
 class _CREDUI_INFOW(ctypes.Structure):
@@ -120,11 +118,11 @@ ApprovalConfirmation = ProductionApprovalConfirmation | TestApprovalConfirmation
 
 
 class ProductionFounderAuthenticator:
-    """Keeper-account confirmation bound to the local Windows principal."""
+    """OS-backed local confirmation. No identity is accepted from the caller."""
 
     __slots__ = (
         "__machine_identity", "__founder_sid", "__capability_issuer",
-        "__key_path", "__sealed",
+        "__sealed",
     )
     __machine_identity: str
     __founder_sid: str
@@ -140,7 +138,6 @@ class ProductionFounderAuthenticator:
         # Constructor compatibility only. Production proof and capability
         # signing no longer use an exportable current-user DPAPI key.
         key_path.resolve()
-        object.__setattr__(self, "_ProductionFounderAuthenticator__key_path", key_path.resolve())
         object.__setattr__(
             self,
             "_ProductionFounderAuthenticator__machine_identity",
@@ -164,22 +161,26 @@ class ProductionFounderAuthenticator:
         object.__setattr__(self, name, value)
 
     def authenticate(
-        self,
-        challenge: FounderApprovalChallenge,
-        *,
-        username: str | None = None,
-        password: str | None = None,
+        self, challenge: FounderApprovalChallenge
     ) -> ProductionApprovalConfirmation:
-        account = self._verify_keeper_account(username, password)
-        principal_sid = self.__founder_sid
-        account_name = f"Keeper\\{account}"
-        logon_session = f"keeper-account:{uuid.uuid4().hex}"
+        try:
+            principal_sid, account_name, logon_session = _credential_ui_logon()
+        except PermissionError:
+            raise
+        except OSError as error:
+            raise RuntimeError(
+                "Windows Founder authentication is unavailable"
+            ) from error
+        if principal_sid != self.__founder_sid:
+            raise PermissionError(
+                "authenticated Windows principal is not the provisioned Founder"
+            )
         now = datetime.now(UTC)
         unsigned: _UnsignedConfirmation = {
             "session_id": f"founder-session-{uuid.uuid4().hex}",
             "principal_sid": principal_sid,
             "account_name": account_name,
-            "authentication_method": "KEEPER_ACCOUNT_PASSWORD",
+            "authentication_method": "WINDOWS_CREDENTIAL_LOGON",
             "authenticated_at": now.isoformat(),
             "expires_at": min(
                 now + CONFIRMATION_LIFETIME,
@@ -196,7 +197,7 @@ class ProductionFounderAuthenticator:
             "approval_action": challenge.approval_action,
             "bound_digest": challenge.charter_digest,
             "source_user_interaction_id": (
-                f"keeper-account-ui-{uuid.uuid4().hex}"
+                f"windows-credential-ui-{uuid.uuid4().hex}"
             ),
             "proof_version": PROOF_VERSION,
         }
@@ -219,7 +220,7 @@ class ProductionFounderAuthenticator:
             self.__machine_identity,
             challenge,
             confirmation,
-            expected_method="KEEPER_ACCOUNT_PASSWORD",
+            expected_method="WINDOWS_CREDENTIAL_LOGON",
             expected_principal_sid=self.__founder_sid,
         )
 
@@ -253,58 +254,6 @@ class ProductionFounderAuthenticator:
         return ProductionFounderCapabilityVerifier(
             self.capability_verifier_configuration()
         ).verify(value)
-
-    def configure_keeper_account(self, username: str, password: str) -> None:
-        clean_username = _validate_keeper_username(username)
-        _validate_keeper_password(password)
-        salt = secrets.token_bytes(16)
-        verifier = _password_verifier(password, salt)
-        path = self.__account_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 1,
-            "username": clean_username,
-            "salt": salt.hex(),
-            "verifier": verifier.hex(),
-            "iterations": KEEPER_PASSWORD_ITERATIONS,
-        }
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
-        descriptor = os.open(path, flags, 0o600)
-        try:
-            os.write(
-                descriptor,
-                json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-            )
-        finally:
-            os.close(descriptor)
-
-    @property
-    def __account_path(self) -> Path:
-        return self.__key_path.parent / "keeper-account.json"
-
-    def _verify_keeper_account(
-        self, username: str | None, password: str | None
-    ) -> str:
-        if not username or password is None:
-            raise PermissionError(
-                "Keeper authorization username and password are required"
-            )
-        try:
-            payload = json.loads(self.__account_path.read_text(encoding="utf-8"))
-            stored_username = str(payload["username"])
-            salt = bytes.fromhex(str(payload["salt"]))
-            expected = bytes.fromhex(str(payload["verifier"]))
-            iterations = int(payload["iterations"])
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
-            raise PermissionError(
-                "Keeper authorization account is not configured"
-            ) from error
-        if iterations != KEEPER_PASSWORD_ITERATIONS or username != stored_username:
-            raise PermissionError("Keeper authorization credentials are invalid")
-        actual = _password_verifier(password, salt, iterations)
-        if not secrets.compare_digest(actual, expected):
-            raise PermissionError("Keeper authorization credentials are invalid")
-        return stored_username
 
 
 class TestFounderAuthenticator:
@@ -347,11 +296,7 @@ class TestFounderAuthenticator:
         object.__setattr__(self, name, value)
 
     def authenticate(
-        self,
-        challenge: FounderApprovalChallenge,
-        *,
-        username: str | None = None,
-        password: str | None = None,
+        self, challenge: FounderApprovalChallenge
     ) -> TestApprovalConfirmation:
         now = datetime.now(UTC)
         unsigned: _UnsignedConfirmation = {
@@ -428,29 +373,6 @@ class TestFounderAuthenticator:
 
 
 FounderAuthenticator = ProductionFounderAuthenticator | TestFounderAuthenticator
-
-
-def _validate_keeper_username(value: str) -> str:
-    username = value.strip()
-    if len(username) < 3 or len(username) > 64 or any(
-        character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-        for character in username
-    ):
-        raise ValueError("Keeper authorization username must be 3-64 safe characters")
-    return username
-
-
-def _validate_keeper_password(value: str) -> None:
-    if len(value) < 12 or len(value) > 256:
-        raise ValueError("Keeper authorization password must be 12-256 characters")
-
-
-def _password_verifier(
-    password: str, salt: bytes, iterations: int = KEEPER_PASSWORD_ITERATIONS
-) -> bytes:
-    return hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt, iterations, dklen=32
-    )
 
 
 class _ConfirmationVerifier(Protocol):

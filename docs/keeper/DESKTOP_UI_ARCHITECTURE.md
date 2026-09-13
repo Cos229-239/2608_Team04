@@ -35,7 +35,7 @@ Qt Quick/QML
 - QML receives only primitive dictionaries/lists with redacted paths.
 - Provider credentials are never accepted by this frontend.
 - Provider configuration stores executable paths only and never silently registers or qualifies a provider.
-- Founder approval calls the Keeper authorization-account path and binds the exact displayed charter ID and revision; it never requests the Windows password.
+- Founder approval calls the existing production authentication path and binds the exact displayed charter ID and revision.
 - Unsupported actions are absent or visibly disabled with a stable reason.
 - KeeperAuthority health is read-only; the desktop cannot install, restart, or reconfigure the service.
-- The desktop may explicitly relaunch its own process after confirmation. The new process constructs the application normally, so existing durable startup recovery reconciles interrupted work; this does not restart or reconfigure KeeperAuthority.
+- Automatic desktop relaunch is unavailable until shutdown and single-instance ownership are safe. Close the desktop normally and wait for it to exit before reopening; never run two instances against one profile.

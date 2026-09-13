@@ -294,8 +294,8 @@ def test_non_windows_wrapper_fails_before_loading_native_api(
         founder_auth._credential_ui_logon()
 
 
-def test_missing_keeper_authentication_creates_no_downstream_state(
-    tmp_path: Path
+def test_failed_production_authentication_creates_no_downstream_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     database = tmp_path / "production.db"
     executive = KeeperExecutive(database)
@@ -337,7 +337,11 @@ def test_missing_keeper_authentication_creates_no_downstream_state(
 
     before = durable_counts()
 
-    with pytest.raises(PermissionError, match="username and password are required"):
+    def cancel() -> tuple[str, str, str]:
+        raise PermissionError("Windows Founder authentication was canceled")
+
+    monkeypatch.setattr(founder_auth, "_credential_ui_logon", cancel)
+    with pytest.raises(PermissionError, match="canceled"):
         executive.authenticate_founder(challenge)
 
     assert durable_counts() == before

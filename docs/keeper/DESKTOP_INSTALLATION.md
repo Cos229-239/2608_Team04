@@ -82,4 +82,4 @@ and performs a read-only KeeperAuthority health projection. Provider
 registration and qualification remain separate Authority operations.
 
 The application never automates Founder credential entry. Charter approval
-opens the Keeper authorization dialog and waits for the configured Founder account.
+opens the normal Windows credential dialog and waits for the Founder.

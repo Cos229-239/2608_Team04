@@ -39,14 +39,14 @@ configuration before execution.
 
 ## Local Founder confirmation
 
-Production Founder approval uses a Keeper-owned authorization account created in
-Keeper Settings. Only a salted PBKDF2-HMAC-SHA256 verifier is stored; the
-password is never logged, persisted in plaintext, or passed to Windows. The
-authenticated Keeper username is bound to the exact challenge and the current
-local Windows principal SID/machine identity. A caller-supplied SID,
-conversation speaker, or `LOCAL_FOUNDER` string has no authority. Missing,
-invalid, or unconfigured Keeper credentials fail closed before any downstream
-approval state is created.
+Production Founder approval uses the Windows credential UI and validates the
+credential with `LogonUser`. The resulting token SID must equal the Windows SID
+provisioned from the Keeper desktop process; a caller-supplied account, SID,
+conversation speaker, or `LOCAL_FOUNDER` string has no authority. The packed
+Credential UI buffer is zeroed over its complete returned byte length before
+`CoTaskMemFree`; the unpacked user, domain, and password buffers are zeroed on
+success, rejection, cancellation, and exceptions, and token handles are closed
+exactly once.
 
 The confirmation and final single-purpose Founder capability are signed with a
 3072-bit RSA key in the Microsoft Software Key Storage Provider. The private key

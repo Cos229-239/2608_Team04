@@ -150,7 +150,7 @@ class KeeperDesktopController(QObject):
     setupChanged = Signal()
     conversationDraftChanged = Signal()
     operationFinished = Signal(str, bool)
-    rebootRequested = Signal()
+    _asyncFinished = Signal(object, str, str, bool)
 
     def __init__(
         self,
@@ -250,11 +250,10 @@ class KeeperDesktopController(QObject):
     def refresh(self) -> None:
         self._run("Durable state refreshed", self._build_state, result_to_state=True)
 
-    @Slot()
-    def reboot(self) -> None:
-        self._status, self._error = "Rebooting Keeper Desktop", ""
-        self.statusChanged.emit()
-        self.rebootRequested.emit()
+    def _refresh_state_only(self) -> None:
+        """Refresh presentation data without replacing useful operation feedback."""
+        self._state = self._build_state()
+        self.stateChanged.emit()
 
     def _build_state(self) -> dict[str, Any]:
         snapshot = self.pass_b.product_snapshot()
@@ -656,8 +655,8 @@ class KeeperDesktopController(QObject):
 
         self._run(f"{selected} selected as the primary agent", save)
 
-    @Slot(str, str)
-    def approveCurrentCharter(self, username: str = "", password: str = "") -> None:
+    @Slot()
+    def approveCurrentCharter(self) -> None:
         project_id = self.pass_b.selected_project_id()
         approval = self._state.get("project", {}).get("approvalCharter", {})
         if not project_id or not approval:
@@ -677,17 +676,6 @@ class KeeperDesktopController(QObject):
                     project_id,
                     expected_charter_id=str(approval.get("charter_id")),
                     expected_charter_revision=int(approval.get("revision")),
-                founder_username=username,
-                founder_password=password,
-            ),
-        )
-
-    @Slot(str, str)
-    def configureFounderAccount(self, username: str, password: str) -> None:
-        self._run(
-            "Keeper Founder account configured",
-            lambda: self.pass_b.executive.configure_founder_account(
-                username.strip(), password
                 )
                 charter = outcome.get("charter", {})
                 mode = str(charter.get("delegation_mode", "ADVISORY")).upper()
@@ -715,7 +703,7 @@ class KeeperDesktopController(QObject):
             try:
                 self._refresh_state_only()
             except Exception as refresh_error:
-                self._status = "Project started, but the screen could not refresh"
+                self._status = "Charter approval status could not refresh; inspect before retrying"
                 self._error = _safe_error_message(refresh_error)
                 success = False
                 self.statusChanged.emit()

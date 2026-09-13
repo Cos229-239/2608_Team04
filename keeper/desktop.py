@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import threading
 from functools import partial
 from pathlib import Path
@@ -671,7 +670,6 @@ def main(arguments: list[str] | None = None) -> int:
         smoke=options.ui_smoke,
         screenshot_directory=options.screenshot_dir,
         test_fixture=options.test_ui_fixture,
-        restart_command=[sys.executable, "-m", "keeper.desktop", *sys.argv[1:]],
     )
 
 

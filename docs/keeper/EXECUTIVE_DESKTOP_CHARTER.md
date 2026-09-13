@@ -51,7 +51,7 @@ callbacks remain compatible.
 
 - The desktop is a projection and supported service client, never an authority
   source.
-- Founder approval continues through the Keeper authorization account and
+- Founder approval continues through the existing Windows authentication and
   exact current-charter service path. The approval dialog renders the exact
   pending charter identity, and the service revalidates that displayed ID and
   revision before authentication.

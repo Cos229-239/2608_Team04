@@ -4,7 +4,10 @@ from pathlib import Path
 from typing import Any
 
 from keeper.authority_service.client import ProductionAuthorityServiceClient
-from keeper.pass_b.application import PassBApplication
+from keeper.pass_b.application import (
+    PassBApplication,
+    authority_exchange_root_from_diagnostics,
+)
 from keeper.ui.setup import (
     ProductSetupController,
     configured_authority_bindings,

@@ -370,25 +370,14 @@ class CharterService:
         )
 
     def authenticate(
-        self,
-        challenge: FounderApprovalChallenge,
-        *,
-        username: str | None = None,
-        password: str | None = None,
+        self, challenge: FounderApprovalChallenge
     ) -> ApprovalConfirmation:
-        confirmation = self.__authenticator.authenticate(
-            challenge, username=username, password=password
-        )
+        confirmation = self.__authenticator.authenticate(challenge)
         self.__repository.register_founder_session(
             challenge_id=challenge.challenge_id,
             confirmation=confirmation,
         )
         return confirmation
-
-    def configure_keeper_account(self, username: str, password: str) -> None:
-        if type(self.__authenticator) is not ProductionFounderAuthenticator:
-            raise RuntimeError("Keeper account configuration requires production authentication")
-        self.__authenticator.configure_keeper_account(username, password)
 
     def request_action_approval(
         self,
