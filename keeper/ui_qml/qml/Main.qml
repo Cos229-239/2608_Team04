@@ -26,6 +26,7 @@ ApplicationWindow {
     readonly property color warning: "#E6AE36"
     readonly property color danger: "#EA5A53"
     property string searchQuery: ""
+    property string searchFeedback: ""
     property var selectedRecord: ({})
     property string selectedRunId: ""
     property string projectStateFilter: "ALL"
@@ -43,7 +44,7 @@ ApplicationWindow {
     property string pendingConversationText: ""
     property string failedConversationText: ""
     property bool clearingSubmittedDraft: false
-    onSearchQueryChanged: taskPage = 0
+    onSearchQueryChanged: { taskPage = 0; searchFeedback = "" }
     onClosing: function(close) {
         draftSaveTimer.stop()
         close.accepted = keeper.flushConversationDraft()
@@ -161,37 +162,56 @@ ApplicationWindow {
             return JSON.stringify(item).toLowerCase().indexOf(query) >= 0
         })
     }
+    function clearSearch() {
+        globalSearchField.clear()
+        searchQuery = ""
+        searchFeedback = ""
+    }
     function openSearchResults() {
         var query = searchQuery.trim().toLowerCase()
-        if (!query) return
-        var destinations = [
-            ["recovery", "Recovery"], ["uncertain", "Recovery"],
-            ["provider", "Providers"], ["task", "Tasks"],
-            ["workflow", "Workflows"], ["evidence", "Evidence"],
-            ["review", "Reviews"], ["finding", "Findings"],
-            ["authorization", "Authorizations"], ["report", "Reports"],
-            ["repository", "Repositories"], ["project", "Projects"]
-        ]
-        for (var i = 0; i < destinations.length; ++i) {
-            if (query.indexOf(destinations[i][0]) >= 0) {
-                keeper.navigate(destinations[i][1])
-                return
-            }
-        }
+        if (!query) { searchFeedback = ""; return }
         var collections = [
             [keeper.state.project ? keeper.state.project.catalog : [], "Projects"],
+            [keeper.state.projects || [], "Repositories"],
             [keeper.state.workflows || [], "Workflows"],
             [keeper.state.tasks || [], "Tasks"],
+            [keeper.state.findings || [], "Findings"],
+            [keeper.state.authorizations || [], "Authorizations"],
             [keeper.state.evidence || [], "Evidence"],
             [keeper.state.evidenceReferences || [], "Evidence"],
-            [keeper.state.runs || [], "Reports"]
+            [keeper.state.reviews || [], "Reviews"],
+            [keeper.state.runs || [], "Reports"],
+            [keeper.state.usage || [], "Providers"],
+            [keeper.state.providers || [], "Providers"],
+            [keeper.state.recoveries || [], "Recovery"]
         ]
         for (var j = 0; j < collections.length; ++j) {
             if (filtered(collections[j][0]).length > 0) {
                 keeper.navigate(collections[j][1])
+                searchFeedback = "Matching records in " + collections[j][1] + ". Check page filters if a result is hidden."
                 return
             }
         }
+        var destinations = [
+            ["recovery", "Recovery"], ["uncertain", "Recovery"],
+            ["provider", "Providers"], ["providers", "Providers"],
+            ["task", "Tasks"], ["tasks", "Tasks"],
+            ["workflow", "Workflows"], ["workflows", "Workflows"],
+            ["evidence", "Evidence"], ["review", "Reviews"], ["reviews", "Reviews"],
+            ["finding", "Findings"], ["findings", "Findings"],
+            ["authorization", "Authorizations"], ["authorizations", "Authorizations"],
+            ["report", "Reports"], ["reports", "Reports"],
+            ["repository", "Repositories"], ["repositories", "Repositories"],
+            ["project", "Projects"], ["projects", "Projects"]
+        ]
+        for (var i = 0; i < destinations.length; ++i) {
+            if (query === destinations[i][0]) {
+                clearSearch()
+                keeper.navigate(destinations[i][1])
+                return
+            }
+        }
+        searchFeedback = "No matching records in loaded data. Try another term or clear search."
     }
     function friendlyRecord(record) {
         var value = record || {}
@@ -627,6 +647,7 @@ ApplicationWindow {
                     Rectangle { visible: window.width >= 1430; Layout.preferredWidth: 1; Layout.preferredHeight: 34; color: border }
                     TextField {
                         objectName: "globalSearch"
+                        id: globalSearchField
                         Layout.preferredWidth: window.width >= 1500 ? 300 : 220
                         Layout.minimumWidth: 160
                         placeholderText: "Search projects, workflows, evidence…"
@@ -634,9 +655,11 @@ ApplicationWindow {
                         placeholderTextColor: "#777777"
                         onTextChanged: window.searchQuery = text
                         onAccepted: window.openSearchResults()
+                        Keys.onEscapePressed: window.clearSearch()
                         background: Rectangle { color: "#121414"; radius: 5; border.color: parent.activeFocus ? gold : "#3A3C3B" }
                     }
                     QuietButton { objectName: "refreshButton"; text: "Refresh"; enabled: !keeper.busy; onClicked: keeper.refresh() }
+                    QuietButton { objectName: "clearSearchButton"; text: "Clear search"; visible: window.searchQuery.length > 0; onClicked: window.clearSearch() }
                     Rectangle { width: 1; height: 34; color: border }
                     ColumnLayout {
                         spacing: 0
@@ -646,6 +669,17 @@ ApplicationWindow {
                 }
             }
 
+            Text {
+                objectName: "searchFeedback"
+                Layout.fillWidth: true
+                Layout.leftMargin: 24
+                Layout.rightMargin: 24
+                visible: window.searchFeedback.length > 0
+                text: window.searchFeedback
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                color: window.textMuted
+            }
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
