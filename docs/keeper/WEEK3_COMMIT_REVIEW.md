@@ -19,3 +19,11 @@ Fourteen lists distinguish hidden matches from genuinely empty data. Explicit re
 ## 4. Keep long Keeper approval details scrollable and controls visible
 
 Bound approval details to the window, keep action buttons in a fixed footer, render dynamic values literally and reset scroll on reopening. Retains Dane's expiry/retry explanation and regression (`6f5b996`), credited as imported work. Adds long-text geometry/scrolling tests at two window sizes. Authentication and controller action remain unchanged; independent review found no Critical/High issues.
+
+## 5. Make Keeper record details readable and selectable
+
+Bound long records to a scrollable, word-wrapped, read-only plain-text view. Add mouse selection, Select all and explicit Copy selection. Reopening resets scroll/cursor. Extend the shared stress test with record selection, literal text, bounds and reopen coverage; tests do not write to the clipboard. Independent review found no Critical/High issues.
+
+## Verification and publication
+
+The complete integration working tree passed 385 regression tests before commit preparation. This included separately pending provider diagnostics and shared-setup coverage; that result is not a claim that those changes are included in these five commits. No live installed-provider acceptance test was performed. The five commits are local only; pushing and Trello publication require separate approval.

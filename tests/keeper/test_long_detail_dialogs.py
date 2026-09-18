@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 
-@pytest.mark.parametrize("kind", ["approval"])
+@pytest.mark.parametrize("kind", ["approval", "record"])
 def test_long_dialogs_are_bounded_and_scrollable(tmp_path, kind):
     script = r'''
 import sys, time

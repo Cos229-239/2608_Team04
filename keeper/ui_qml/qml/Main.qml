@@ -1495,13 +1495,42 @@ ApplicationWindow {
 
     Dialog {
         id: recordDialog
+        objectName: "recordDetailsDialog"
         anchors.centerIn: parent
         width: Math.min(760, window.width - 80)
         modal: true
         title: "Keeper details"
+        height: Math.min(620, window.height - 48)
+        onOpened: { recordDetailsText.cursorPosition = 0; recordDetailsScroll.contentItem.contentY = 0 }
         standardButtons: Dialog.Close
         background: Rectangle { color: panelRaised; border.color: goldDim; radius: 7 }
-        contentItem: ScrollView { implicitHeight: 440; TextArea { readOnly: true; text: (keeper.state.settings && keeper.state.settings.developerDetails) ? JSON.stringify(window.selectedRecord || {}, null, 2) : window.friendlyRecord(window.selectedRecord); color: textPrimary; wrapMode: TextEdit.WrapAnywhere; background: Rectangle { color: "#101212"; border.color: "#333534" } } }
+        contentItem: ColumnLayout {
+            spacing: 8
+            RowLayout {
+                QuietButton { objectName: "selectAllRecordDetails"; text: "Select all"; onClicked: recordDetailsText.selectAll() }
+                QuietButton { objectName: "copyRecordDetails"; text: "Copy selection"; enabled: recordDetailsText.selectedText.length > 0; onClicked: recordDetailsText.copy() }
+                Item { Layout.fillWidth: true }
+            }
+            ScrollView {
+                id: recordDetailsScroll
+                objectName: "recordDetailsScroll"
+                Layout.fillWidth: true; Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+                TextArea {
+                    id: recordDetailsText
+                    objectName: "recordDetailsText"
+                    width: recordDetailsScroll.availableWidth
+                    readOnly: true
+                    selectByMouse: true
+                    textFormat: TextEdit.PlainText
+                    text: (keeper.state.settings && keeper.state.settings.developerDetails) ? JSON.stringify(window.selectedRecord || {}, null, 2) : window.friendlyRecord(window.selectedRecord)
+                    color: textPrimary
+                    wrapMode: TextEdit.Wrap
+                    background: Rectangle { color: "#101212"; border.color: "#333534" }
+                }
+            }
+        }
     }
 
     FileDialog {
