@@ -13,6 +13,21 @@ from keeper.ui.setup import (
     configured_authority_bindings,
 )
 
+_PROVIDER_STARTUP_BLOCK = (
+    "Provider execution is blocked: KeeperAuthority is unavailable or a saved "
+    "provider authorization is no longer valid. Check service status and renew "
+    "provider qualification through the supported setup flow, then restart Keeper. "
+    "No provider fallback or paid execution has been enabled."
+)
+
+
+def _blocked_desktop(data_directory: Path, health_client: Any) -> PassBApplication:
+    # Rebuild without launch/reservation authority, even if an earlier provider
+    # bridged successfully. Durable records and recovery identity stay intact.
+    result = PassBApplication(data_directory, authority_health_client=health_client)
+    result.startup_provider_block = _PROVIDER_STARTUP_BLOCK
+    return result
+
 
 def desktop_pass_b_application(
     application: Any, *, authority_health_client: Any | None = None
@@ -26,9 +41,13 @@ def desktop_pass_b_application(
             from keeper.pass_b.provider_bridge import bridge_qualified_provider
             from keeper.pass_b.usage_authority import ProductionUsageResetVerifier
 
-            exchange_root = authority_exchange_root_from_diagnostics(
-                health_client.diagnostics()
-            )
+            try:
+                exchange_root = authority_exchange_root_from_diagnostics(
+                    health_client.diagnostics()
+                )
+            except (PermissionError, TimeoutError, ConnectionError):
+                return _blocked_desktop(data_directory, health_client)
+            # Do not swallow database/recovery identity or construction errors.
             result = PassBApplication(
                 data_directory,
                 authority_client=health_client,
@@ -37,8 +56,11 @@ def desktop_pass_b_application(
                 authority_exchange_root=exchange_root,
                 usage_reset_verifier=ProductionUsageResetVerifier.unavailable(),
             )
-            for binding in bindings:
-                bridge_qualified_provider(result.orchestration, health_client, binding)
+            try:
+                for binding in bindings:
+                    bridge_qualified_provider(result.orchestration, health_client, binding)
+            except (PermissionError, TimeoutError, ConnectionError):
+                return _blocked_desktop(data_directory, health_client)
             return result
     return PassBApplication(
         data_directory, authority_health_client=health_client

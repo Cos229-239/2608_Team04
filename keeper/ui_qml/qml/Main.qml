@@ -688,6 +688,17 @@ ApplicationWindow {
             }
 
             Text {
+                objectName: "startupProviderBlock"
+                Layout.fillWidth: true
+                Layout.leftMargin: 24
+                Layout.rightMargin: 24
+                visible: !!keeper.state.startupProviderBlock
+                text: keeper.state.startupProviderBlock || ""
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                color: window.warning
+            }
+            Text {
                 objectName: "searchFeedback"
                 Layout.fillWidth: true
                 Layout.leftMargin: 24

@@ -470,6 +470,7 @@ class KeeperDesktopController(QObject):
                 )
             )
         state = {
+            "startupProviderBlock": self.pass_b.startup_provider_block,
             "navigation": list(NAVIGATION),
             "environment": (
                 "TEST UI FIXTURE"
