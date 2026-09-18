@@ -11,3 +11,7 @@ Provider-diagnostics integration and shared-setup tests are outside this five-it
 ## 2. Fix Keeper search routing and no-results feedback
 
 Actual loaded-record matches take priority over exact page shortcuts. Added missing searchable collections, plain-text result feedback, Escape and clear-search controls. Usage results route to Providers. Real-QML regression covers keyword collisions, routing, normalization and no-match behavior without changing authority or calling providers.
+
+## 3. Distinguish filtered Keeper lists from empty records
+
+Fourteen lists distinguish hidden matches from genuinely empty data. Explicit reset clears search and only the current page's filters; selector labels stay synchronized. Recovery uncertainty remains globally visible and unchanged. Real-QML tests cover all lists, reset behavior and record immutability.

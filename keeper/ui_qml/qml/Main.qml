@@ -167,6 +167,19 @@ ApplicationWindow {
         searchQuery = ""
         searchFeedback = ""
     }
+    function resetPageFilters(page) {
+        clearSearch()
+        if (page === "Projects") projectStateFilter = "ALL"
+        if (page === "Tasks") { taskStatusFilter = "ALL"; taskPage = 0 }
+        if (page === "Findings") {
+            findingSeverityFilter = "ALL"
+            findingStatusFilter = "ALL"
+            findingRepairFilter = "ALL"
+        }
+        if (page === "Reports") reportAvailabilityFilter = "ALL"
+        if (page === "Providers") providerHealthFilter = "ALL"
+        if (page === "Recovery") recoveryStatusFilter = "ALL"
+    }
     function openSearchResults() {
         var query = searchQuery.trim().toLowerCase()
         if (!query) { searchFeedback = ""; return }
@@ -475,14 +488,19 @@ ApplicationWindow {
         id: emptyRoot
         property string title: "Nothing here yet"
         property string detail: "Keeper will show durable state here when it becomes available."
+        property int sourceCount: 0
+        property string filterPage: ""
+        readonly property bool filteredOut: sourceCount > 0
+        readonly property string displayedTitle: filteredOut ? "No matching records" : title
         implicitHeight: 180
         Column {
             width: Math.min(460, Math.max(120, emptyRoot.width - 24))
             anchors.centerIn: parent
             spacing: 10
-            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "◇"; color: gold; font.pixelSize: 34 }
-            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: emptyRoot.title; color: textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
-            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: emptyRoot.detail; color: textMuted; font.pixelSize: 13; wrapMode: Text.Wrap }
+            Text { visible: !emptyRoot.filteredOut; width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "◇"; color: gold; font.pixelSize: 34 }
+            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: emptyRoot.displayedTitle; textFormat: Text.PlainText; color: textPrimary; font.pixelSize: 18; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
+            Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: emptyRoot.filteredOut ? emptyRoot.sourceCount + " loaded record(s) are hidden by the search or page filters. Clear them to see the records." : emptyRoot.detail; textFormat: Text.PlainText; color: textMuted; font.pixelSize: 13; wrapMode: Text.Wrap }
+            QuietButton { objectName: "resetEmptyFilters"; anchors.horizontalCenter: parent.horizontalCenter; visible: emptyRoot.filteredOut; text: "Clear search & filters"; onClicked: window.resetPageFilters(emptyRoot.filterPage) }
         }
     }
 
@@ -1003,7 +1021,7 @@ ApplicationWindow {
                         ColumnLayout {
                             id: projectColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
                             PageHeader { title: "Projects & Charters"; subtitle: "Founder intent, current charter, and execution boundaries."; actionText: "+ New Project"; onAction: { keeper.startNewProject(); window.openAssistant() } }
-                            RowLayout { Layout.fillWidth: true; Item { Layout.fillWidth: true } BodyText { text: "Project state" } ComboBox { id: projectStateSelector; Layout.preferredWidth: 230; model: ["ALL", "INTAKE", "CLARIFICATION_REQUIRED", "CHARTER_DRAFT", "AWAITING_CHARTER_APPROVAL", "ACTIVE", "PLANNING", "EXECUTING", "REVIEWING", "BLOCKED", "PAUSED", "WAITING_FOR_PROVIDER", "WAITING_FOR_USAGE_RESET", "WAITING_FOR_FOUNDER", "WAITING_FOR_CREDENTIAL", "WAITING_FOR_EXTERNAL_SYSTEM", "COMPLETED", "CANCELED", "FAILED", "RECOVERY_REQUIRED", "UNKNOWN"]; onActivated: window.projectStateFilter = currentText } }
+                            RowLayout { Layout.fillWidth: true; Item { Layout.fillWidth: true } BodyText { text: "Project state" } ComboBox { id: projectStateSelector; Layout.preferredWidth: 230; model: ["ALL", "INTAKE", "CLARIFICATION_REQUIRED", "CHARTER_DRAFT", "AWAITING_CHARTER_APPROVAL", "ACTIVE", "PLANNING", "EXECUTING", "REVIEWING", "BLOCKED", "PAUSED", "WAITING_FOR_PROVIDER", "WAITING_FOR_USAGE_RESET", "WAITING_FOR_FOUNDER", "WAITING_FOR_CREDENTIAL", "WAITING_FOR_EXTERNAL_SYSTEM", "COMPLETED", "CANCELED", "FAILED", "RECOVERY_REQUIRED", "UNKNOWN"]; objectName: "projectStateFilterSelector"; currentIndex: Math.max(0, model.indexOf(window.projectStateFilter)); onActivated: window.projectStateFilter = currentText } }
                             KPanel {
                                 Layout.fillWidth: true; Layout.preferredHeight: 230
                                 SectionTitle { text: "KEEPER PROJECTS" }
@@ -1015,7 +1033,7 @@ ApplicationWindow {
                                         RowLayout { anchors.fill: parent; anchors.margins: 12; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, modelData.project_id); font.weight: Font.DemiBold } StatusPill { value: window.text(modelData.state, "UNKNOWN") } }
                                         MouseArea { id: mouse; anchors.fill: parent; hoverEnabled: true; onClicked: keeper.selectProject(modelData.project_id) }
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No Keeper project yet"; detail: "Use Keeper Assistant to describe an outcome. Keeper will draft a charter for review." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyProjects"; sourceCount: (keeper.state.project ? keeper.state.project.catalog || [] : []).length; filterPage: "Projects"; title: "No Keeper project yet"; detail: "Use Keeper Assistant to describe an outcome. Keeper will draft a charter for review." }
                                 }
                             }
                             KPanel {
@@ -1048,7 +1066,7 @@ ApplicationWindow {
                         ColumnLayout {
                             id: repositoryColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
                             PageHeader { title: "Repositories"; subtitle: "Protected originals and isolated execution workspaces."; actionText: "+ Add Repository"; onAction: addRepositoryDialog.open() }
-                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 460; SectionTitle { text: "REGISTERED REPOSITORIES" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.projects || []); clip: true; delegate: RecordRow { title: text(modelData.name, modelData.id); subtitle: "Branch " + text(modelData.branch, "unknown") + " • protected original: " + text(modelData.protected_original, "true"); state: modelData.dirty ? "DIRTY" : "READY" } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No repository configured"; detail: "Add a local Git repository. Keeper keeps its original protected and performs work in isolated reservations." } } }
+                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 460; SectionTitle { text: "REGISTERED REPOSITORIES" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.projects || []); clip: true; delegate: RecordRow { title: text(modelData.name, modelData.id); subtitle: "Branch " + text(modelData.branch, "unknown") + " • protected original: " + text(modelData.protected_original, "true"); state: modelData.dirty ? "DIRTY" : "READY" } EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyRepositories"; sourceCount: (keeper.state.projects || []).length; filterPage: "Repositories"; title: "No repository configured"; detail: "Add a local Git repository. Keeper keeps its original protected and performs work in isolated reservations." } } }
                         }
                     }
 
@@ -1064,7 +1082,7 @@ ApplicationWindow {
                                 BodyText { Layout.fillWidth: true; text: "This project is in Advisory mode. Keeper can show the plan, but it cannot run a provider until you approve Delegated mode." }
                                 MutedText { Layout.fillWidth: true; text: "Choose Enable Approved Work above. Keeper will prepare the one required revision and clearly show the Founder approval step." }
                             }
-                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "ACTIVE WORKFLOW" } MutedText { Layout.fillWidth: true; text: window.workflowStatusText(); wrapMode: Text.WordWrap } ListView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 10; model: filtered(keeper.state.workflows || []); delegate: Rectangle { width: ListView.view.width; height: 82; radius: 6; color: workflowMouse.containsMouse ? "#1B1D1C" : "#121414"; border.color: statusColor(modelData.status); RowLayout { anchors.fill: parent; anchors.margins: 14; Rectangle { Layout.preferredWidth: 42; Layout.preferredHeight: 42; radius: 21; color: "#2D2513"; Text { anchors.centerIn: parent; text: index + 1; color: goldBright; font.pixelSize: 18 } } ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, "Work item"); font.weight: Font.DemiBold; elide: Text.ElideRight; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Role: " + window.text(modelData.role, "unassigned"); elide: Text.ElideRight; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "PROPOSED") } QuietButton { text: "Stage details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } MouseArea { id: workflowMouse; anchors.fill: parent; hoverEnabled: true; z: -1; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No workflow planned"; detail: "Approve the proposed charter once. Keeper will then plan and advance routine work inside its delegated envelope." } } }
+                            KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "ACTIVE WORKFLOW" } MutedText { Layout.fillWidth: true; text: window.workflowStatusText(); wrapMode: Text.WordWrap } ListView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 10; model: filtered(keeper.state.workflows || []); delegate: Rectangle { width: ListView.view.width; height: 82; radius: 6; color: workflowMouse.containsMouse ? "#1B1D1C" : "#121414"; border.color: statusColor(modelData.status); RowLayout { anchors.fill: parent; anchors.margins: 14; Rectangle { Layout.preferredWidth: 42; Layout.preferredHeight: 42; radius: 21; color: "#2D2513"; Text { anchors.centerIn: parent; text: index + 1; color: goldBright; font.pixelSize: 18 } } ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.title, "Work item"); font.weight: Font.DemiBold; elide: Text.ElideRight; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Role: " + window.text(modelData.role, "unassigned"); elide: Text.ElideRight; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "PROPOSED") } QuietButton { text: "Stage details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } MouseArea { id: workflowMouse; anchors.fill: parent; hoverEnabled: true; z: -1; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyWorkflows"; sourceCount: (keeper.state.workflows || []).length; filterPage: "Workflows"; title: "No workflow planned"; detail: "Approve the proposed charter once. Keeper will then plan and advance routine work inside its delegated envelope." } } }
                         }
                     }
 
@@ -1078,7 +1096,7 @@ ApplicationWindow {
                                 SectionTitle { text: "TASK QUEUE" }
                                 RowLayout { Layout.fillWidth: true
                                     BodyText { text: "Status" }
-                                    ComboBox { id: taskStatusSelector; Layout.preferredWidth: 190; model: ["ALL", "INTAKE", "BACKLOG", "READY", "BUILDING", "SELF_VERIFYING", "INDEPENDENT_AUDIT", "REPAIRING", "FINAL_VERIFY", "APPROVED", "COMPLETED", "BLOCKED", "FAILED", "PAUSED", "CANCELLED"]; onActivated: { window.taskStatusFilter = currentText; window.taskPage = 0 } }
+                                    ComboBox { id: taskStatusSelector; Layout.preferredWidth: 190; model: ["ALL", "INTAKE", "BACKLOG", "READY", "BUILDING", "SELF_VERIFYING", "INDEPENDENT_AUDIT", "REPAIRING", "FINAL_VERIFY", "APPROVED", "COMPLETED", "BLOCKED", "FAILED", "PAUSED", "CANCELLED"]; objectName: "taskStatusFilterSelector"; currentIndex: Math.max(0, model.indexOf(window.taskStatusFilter)); onActivated: { window.taskStatusFilter = currentText; window.taskPage = 0 } }
                                     BodyText { text: "Sort" }
                                     ComboBox { id: taskSortSelector; Layout.preferredWidth: 170; textRole: "label"; valueRole: "key"; model: [{"label":"Title","key":"title"},{"label":"Status","key":"status"},{"label":"Target branch","key":"target_branch"}]; onActivated: { window.taskSortKey = currentValue; window.taskPage = 0 } }
                                     QuietButton { text: window.taskSortAscending ? "Ascending" : "Descending"; onClicked: window.taskSortAscending = !window.taskSortAscending }
@@ -1097,7 +1115,7 @@ ApplicationWindow {
                                             GoldButton { text: "Start"; enabled: String(modelData.status || "INTAKE").toUpperCase() === "INTAKE"; onClicked: keeper.startTask(modelData.id) }
                                         }
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No tasks queued"; detail: "Keeper creates tasks from approved workflows, or you may add a bounded task to a registered repository." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyTasks"; sourceCount: (keeper.state.tasks || []).length; filterPage: "Tasks"; title: "No tasks queued"; detail: "Keeper creates tasks from approved workflows, or you may add a bounded task to a registered repository." }
                                 }
                                 RowLayout { Layout.fillWidth: true; Item { Layout.fillWidth: true } QuietButton { text: "Previous"; enabled: taskSafePage() > 0; onClicked: window.taskPage = taskSafePage() - 1 } MutedText { text: "Page " + (taskSafePage() + 1) + " of " + taskPageCount() } QuietButton { text: "Next"; enabled: taskSafePage() + 1 < taskPageCount(); onClicked: window.taskPage = taskSafePage() + 1 } }
                             }
@@ -1115,11 +1133,11 @@ ApplicationWindow {
                                 SectionTitle { text: "ENGINEERING FINDINGS" }
                                 RowLayout { Layout.fillWidth: true
                                     BodyText { text: "Severity" }
-                                    ComboBox { Layout.preferredWidth: 140; model: ["ALL", "CRITICAL", "HIGH", "MEDIUM", "LOW"]; onActivated: window.findingSeverityFilter = currentText }
+                                    ComboBox { Layout.preferredWidth: 140; model: ["ALL", "CRITICAL", "HIGH", "MEDIUM", "LOW"]; objectName: "findingSeverityFilterSelector"; currentIndex: Math.max(0, model.indexOf(window.findingSeverityFilter)); onActivated: window.findingSeverityFilter = currentText }
                                     BodyText { text: "Status" }
-                                    ComboBox { Layout.preferredWidth: 160; model: ["ALL", "OPEN", "REPAIR_REQUIRED", "REPAIRED", "VERIFIED"]; onActivated: window.findingStatusFilter = currentText }
+                                    ComboBox { Layout.preferredWidth: 160; model: ["ALL", "OPEN", "REPAIR_REQUIRED", "REPAIRED", "VERIFIED"]; objectName: "findingStatusFilterSelector"; currentIndex: Math.max(0, model.indexOf(window.findingStatusFilter)); onActivated: window.findingStatusFilter = currentText }
                                     BodyText { text: "Repair" }
-                                    ComboBox { Layout.preferredWidth: 140; model: ["ALL", "REPAIRED", "UNREPAIRED"]; onActivated: window.findingRepairFilter = currentText }
+                                    ComboBox { Layout.preferredWidth: 140; model: ["ALL", "REPAIRED", "UNREPAIRED"]; objectName: "findingRepairFilterSelector"; currentIndex: Math.max(0, model.indexOf(window.findingRepairFilter)); onActivated: window.findingRepairFilter = currentText }
                                     Item { Layout.fillWidth: true }
                                 }
                                 ListView {
@@ -1133,7 +1151,7 @@ ApplicationWindow {
                                             GoldButton { text: "Create Repair"; visible: !!modelData.review_id; enabled: String(modelData.status || "").toUpperCase() === "REPAIR_REQUIRED"; onClicked: keeper.createRepair(modelData.review_id) }
                                         }
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No recorded findings"; detail: "Independent review and verification findings will appear here with their durable status." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyFindings"; sourceCount: (keeper.state.findings || []).length; filterPage: "Findings"; title: "No recorded findings"; detail: "Independent review and verification findings will appear here with their durable status." }
                                 }
                             }
                         }
@@ -1141,7 +1159,7 @@ ApplicationWindow {
 
                     Flickable {
                         contentWidth: width; contentHeight: authorizationColumn.implicitHeight + 48; clip: true
-                        ColumnLayout { id: authorizationColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16; PageHeader { title: "Authorizations"; subtitle: "Founder approvals, delegated grants, capability use, expiry, and revocation."; actionText: "+ New Authorization"; actionEnabled: false } MutedText { text: "New authority is created only through the supported Founder/charter flow."; color: warning } KPanel { Layout.fillWidth: true; Layout.preferredHeight: 510; SectionTitle { text: "DURABLE AUTHORITY RECORDS" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.authorizations || []); clip: true; delegate: Rectangle { width: ListView.view.width; height: 76; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"; RowLayout { anchors.fill: parent; anchors.margins: 14; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.capability, modelData.id); font.weight: Font.DemiBold } MutedText { text: "Scope: " + window.text(modelData.scope, modelData.task_id) } } StatusPill { value: modelData.revoked_at ? "REVOKED" : (modelData.consumed_at ? "CONSUMED" : "ACTIVE") } QuietButton { text: "Revoke"; enabled: !modelData.revoked_at && !modelData.consumed_at; onClicked: keeper.revokeAuthorization(modelData.id) } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No authorization records"; detail: "Founder approvals and bounded delegated grants will be projected here." } } } }
+                        ColumnLayout { id: authorizationColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16; PageHeader { title: "Authorizations"; subtitle: "Founder approvals, delegated grants, capability use, expiry, and revocation."; actionText: "+ New Authorization"; actionEnabled: false } MutedText { text: "New authority is created only through the supported Founder/charter flow."; color: warning } KPanel { Layout.fillWidth: true; Layout.preferredHeight: 510; SectionTitle { text: "DURABLE AUTHORITY RECORDS" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.authorizations || []); clip: true; delegate: Rectangle { width: ListView.view.width; height: 76; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"; RowLayout { anchors.fill: parent; anchors.margins: 14; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.capability, modelData.id); font.weight: Font.DemiBold } MutedText { text: "Scope: " + window.text(modelData.scope, modelData.task_id) } } StatusPill { value: modelData.revoked_at ? "REVOKED" : (modelData.consumed_at ? "CONSUMED" : "ACTIVE") } QuietButton { text: "Revoke"; enabled: !modelData.revoked_at && !modelData.consumed_at; onClicked: keeper.revokeAuthorization(modelData.id) } } } EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyAuthorizations"; sourceCount: (keeper.state.authorizations || []).length; filterPage: "Authorizations"; title: "No authorization records"; detail: "Founder approvals and bounded delegated grants will be projected here." } } } }
                     }
 
                     Flickable {
@@ -1154,7 +1172,7 @@ ApplicationWindow {
                                     delegate: Rectangle { width: ListView.view.width; height: 72; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
                                         RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.evidence_id, "Evidence bundle"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Producer " + window.text(modelData.producer, "unknown") + " • digest " + window.text(modelData.digest, "unavailable"); elide: Text.ElideMiddle; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.state, "UNTRUSTED") } QuietButton { text: "Safe details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } }
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No validated evidence"; detail: "Provider output remains untrusted until Keeper validates and binds it to an attempt." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyEvidence"; sourceCount: (keeper.state.evidence || []).length; filterPage: "Evidence"; title: "No validated evidence"; detail: "Provider output remains untrusted until Keeper validates and binds it to an attempt." }
                                 }
                             }
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 300; SectionTitle { text: "TYPED EVIDENCE REFERENCES" }
@@ -1162,7 +1180,7 @@ ApplicationWindow {
                                     delegate: Rectangle { width: ListView.view.width; height: 76; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
                                         RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.reference_id, "Typed reference"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: window.text(modelData.classification, "UNKNOWN") + " • source " + window.text(modelData.source_producer, "unknown") + " • " + window.text(modelData.size_bytes, "0") + " bytes • digest " + window.text(modelData.digest, "unavailable"); elide: Text.ElideMiddle; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.review_state, modelData.validation_state) } QuietButton { text: "Preview metadata"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } }
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No typed references"; detail: "Validated references for independent review appear here without exposing protected local paths." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyEvidenceReferences"; sourceCount: (keeper.state.evidenceReferences || []).length; filterPage: "Evidence"; title: "No typed references"; detail: "Validated references for independent review appear here without exposing protected local paths." }
                                 }
                             }
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 260; SectionTitle { text: "SAFE RUN EVIDENCE PREVIEW" }
@@ -1170,14 +1188,14 @@ ApplicationWindow {
                                     delegate: Rectangle { width: ListView.view.width; height: 72; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
                                         RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.id, "Run"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Redacted allowlisted text logs and digests only"; elide: Text.ElideRight; maximumLineCount: 1 } } QuietButton { text: "Preview logs"; onClicked: { var preview = keeper.evidenceDetails(modelData.id, "logs"); if (Object.keys(preview).length > 0) { window.selectedRecord = preview; recordDialog.open() } } } }
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No run evidence"; detail: "Supported redacted text previews appear only for runs with validated Keeper evidence roots." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyRunEvidence"; sourceCount: (keeper.state.runs || []).length; filterPage: "Evidence"; title: "No run evidence"; detail: "Supported redacted text previews appear only for runs with validated Keeper evidence roots." }
                                 }
                             }                        }
                     }
 
                     Flickable {
                         contentWidth: width; contentHeight: reviewColumn.implicitHeight + 48; clip: true
-                        ColumnLayout { id: reviewColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16; PageHeader { title: "Reviews"; subtitle: "Independent reviewer execution, evidence, disposition, and bounded repair." } KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "INDEPENDENT REVIEWS" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.reviews || []); clip: true; delegate: RecordRow { title: text(modelData.review_id, "Review"); subtitle: "Producer assignment " + text(modelData.assignment_id, "unknown") + " • reviewer " + text(modelData.reviewer_assignment_id, "unassigned"); state: text(modelData.disposition, modelData.state) } EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No completed reviews"; detail: "Keeper requires a distinct completed reviewer attempt and validated evidence before acceptance." } } } }
+                        ColumnLayout { id: reviewColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16; PageHeader { title: "Reviews"; subtitle: "Independent reviewer execution, evidence, disposition, and bounded repair." } KPanel { Layout.fillWidth: true; Layout.preferredHeight: 520; SectionTitle { text: "INDEPENDENT REVIEWS" } ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.reviews || []); clip: true; delegate: RecordRow { title: text(modelData.review_id, "Review"); subtitle: "Producer assignment " + text(modelData.assignment_id, "unknown") + " • reviewer " + text(modelData.reviewer_assignment_id, "unassigned"); state: text(modelData.disposition, modelData.state) } EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyReviews"; sourceCount: (keeper.state.reviews || []).length; filterPage: "Reviews"; title: "No completed reviews"; detail: "Keeper requires a distinct completed reviewer attempt and validated evidence before acceptance." } } } }
                     }
 
                     Flickable {
@@ -1202,7 +1220,7 @@ ApplicationWindow {
                                     delegate: Rectangle { width: ListView.view.width; height: 78; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
                                         RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; BodyText { Layout.fillWidth: true; text: window.text(modelData.id, "Run"); font.weight: Font.DemiBold; elide: Text.ElideMiddle; maximumLineCount: 1 } MutedText { Layout.fillWidth: true; text: "Task " + window.text(modelData.task_id, "unknown") + (modelData.evidence_manifest_digest ? " • finalized evidence available" : " • report unavailable until finalization"); elide: Text.ElideMiddle; maximumLineCount: 1 } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { text: "Export"; enabled: !!modelData.evidence_manifest_digest; onClicked: { window.selectedRunId = modelData.id; reportFileDialog.open() } } }
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No run reports"; detail: "A report becomes available only after Keeper validates and finalizes the run evidence." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyReports"; sourceCount: (keeper.state.runs || []).length; filterPage: "Reports"; title: "No run reports"; detail: "A report becomes available only after Keeper validates and finalizes the run evidence." }
                                 }
                             }
                         }
@@ -1243,7 +1261,7 @@ ApplicationWindow {
                                         subtitle: text(modelData.composition, "NOT CONFIGURED") + " • " + text(modelData.authentication_mode, "auth undeclared") + " • " + text(modelData.billing_mode, "billing undeclared") + "\nmodels " + (modelData.model_allowlist || []).join(", ") + " • efforts " + (modelData.effort_levels || []).join(", ") + " • usage " + text(modelData.usage_state, "UNKNOWN") + " • reviewer " + text(modelData.reviewer_status, "UNKNOWN") + " • API billing " + text(modelData.api_billing, "DISABLED") + " • paid fallback " + text(modelData.paid_fallback, "DISABLED")
                                         state: text(modelData.health, "UNAVAILABLE")
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No qualified provider sessions"; detail: "Configure an executable path in Settings, then use the approved Authority workflow to register and qualify it." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyProviders"; sourceCount: (keeper.state.providers || []).length; filterPage: "Providers"; title: "No qualified provider sessions"; detail: "Configure an executable path in Settings, then use the approved Authority workflow to register and qualify it." }
                                 }
                             }
                             KPanel {
@@ -1252,7 +1270,7 @@ ApplicationWindow {
                                 ListView {
                                     Layout.fillWidth: true; Layout.fillHeight: true; model: filtered(keeper.state.usage || []); clip: true
                                     delegate: RecordRow { title: text(modelData.pool_id, "Usage pool"); subtitle: "Consumed " + text(modelData.consumed, "0") + " • reserved " + text(modelData.reserved, "0") + " • remaining " + text(modelData.remaining, "unknown") + " • source " + text(modelData.source, "UNKNOWN") + " • confidence " + text(modelData.confidence, "UNKNOWN"); state: text(modelData.status, "AVAILABLE") }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No usage pools"; detail: "Durable shared-pool accounting appears after a qualified provider session is configured." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyUsage"; sourceCount: (keeper.state.usage || []).length; filterPage: "Providers"; title: "No usage pools"; detail: "Durable shared-pool accounting appears after a qualified provider session is configured." }
                                 }
                             }
                         }
@@ -1284,7 +1302,7 @@ ApplicationWindow {
                                     delegate: Rectangle { width: ListView.view.width; height: 78; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
                                         RowLayout { anchors.fill: parent; anchors.margins: 12; ColumnLayout { Layout.fillWidth: true; BodyText { text: window.text(modelData.id, modelData.run_id); font.weight: Font.DemiBold } MutedText { text: window.text(modelData.reason, "Recovery state requires inspection") } } StatusPill { value: window.text(modelData.status, "UNKNOWN") } QuietButton { text: "Details"; onClicked: { window.selectedRecord = modelData; recordDialog.open() } } GoldButton { visible: String(modelData.source || "") === "pass_b_uncertain_execution"; text: "Resolve safely"; onClicked: keeper.resolveUncertainExecution(modelData.assignment_id) } GoldButton { visible: String(modelData.source || "") !== "pass_b_uncertain_execution"; text: modelData.recovery_action === "retry" ? "Retry stage" : "Resume"; enabled: !!modelData.run_id && (modelData.recovery_action === "resume" || modelData.recovery_action === "retry") && String(modelData.status || "").toUpperCase() !== "UNCERTAIN"; onClicked: keeper.runAction(modelData.run_id, modelData.recovery_action) } }
                                     }
-                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; title: "No recovery action required"; detail: "Keeper currently has no source-backed interrupted or uncertain run requiring attention." }
+                                    EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyRecovery"; sourceCount: (keeper.state.recoveries || []).length; filterPage: "Recovery"; title: "No recovery action required"; detail: "Keeper currently has no source-backed interrupted or uncertain run requiring attention." }
                                 }
                             }
                         }
