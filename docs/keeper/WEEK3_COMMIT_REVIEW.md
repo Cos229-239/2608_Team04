@@ -15,3 +15,7 @@ Actual loaded-record matches take priority over exact page shortcuts. Added miss
 ## 3. Distinguish filtered Keeper lists from empty records
 
 Fourteen lists distinguish hidden matches from genuinely empty data. Explicit reset clears search and only the current page's filters; selector labels stay synchronized. Recovery uncertainty remains globally visible and unchanged. Real-QML tests cover all lists, reset behavior and record immutability.
+
+## 4. Keep long Keeper approval details scrollable and controls visible
+
+Bound approval details to the window, keep action buttons in a fixed footer, render dynamic values literally and reset scroll on reopening. Retains Dane's expiry/retry explanation and regression (`6f5b996`), credited as imported work. Adds long-text geometry/scrolling tests at two window sizes. Authentication and controller action remain unchanged; independent review found no Critical/High issues.

@@ -1427,20 +1427,35 @@ ApplicationWindow {
         objectName: "founderApprovalDialog"
         anchors.centerIn: parent
         width: Math.min(650, window.width - 80)
+        height: Math.min(680, window.height - 48)
+        onOpened: approvalScroll.contentItem.contentY = 0
         modal: true
         title: "Founder Approval Required"
         standardButtons: Dialog.NoButton
         background: Rectangle { color: panelRaised; border.color: gold; radius: 8 }
-        contentItem: ColumnLayout {
-            spacing: 14
+        contentItem: ScrollView {
+            id: approvalScroll
+            objectName: "approvalDetailsScroll"
+            clip: true
+            contentWidth: availableWidth
+            ColumnLayout {
+                width: approvalScroll.availableWidth
+                spacing: 14
             Image { Layout.alignment: Qt.AlignHCenter; source: keeperIcon; sourceSize.width: 100; sourceSize.height: 100; Layout.preferredWidth: 100; Layout.preferredHeight: 100 }
             Text { Layout.alignment: Qt.AlignHCenter; text: "Approve Project Charter"; color: goldBright; font.pixelSize: 23; font.weight: Font.Bold }
-            BodyText { Layout.fillWidth: true; text: window.text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
-            MutedText { Layout.fillWidth: true; text: "Revision " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.revision : "", "unknown") + "  •  Mode: " + window.currentDelegationMode(); horizontalAlignment: Text.AlignHCenter }
-            MutedText { Layout.fillWidth: true; text: "Approved providers: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.approved_providers : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
-            MutedText { Layout.fillWidth: true; text: "Constraints: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.constraints : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
-            MutedText { Layout.fillWidth: true; text: "After authentication, Keeper chooses the safest effective plan and keeps the project moving inside this charter without asking you to manage tasks or workflows."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
-            RowLayout { Layout.alignment: Qt.AlignHCenter; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; onClicked: { charterDialog.close(); keeper.approveCurrentCharter() } } }
+            BodyText { Layout.fillWidth: true; textFormat: Text.PlainText; wrapMode: Text.Wrap; text: window.text(keeper.state.project ? keeper.state.project.title : "", "Current project"); horizontalAlignment: Text.AlignHCenter }
+            MutedText { Layout.fillWidth: true; textFormat: Text.PlainText; text: "Revision " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.revision : "", "unknown") + "  •  Mode: " + window.currentDelegationMode(); horizontalAlignment: Text.AlignHCenter }
+            MutedText { Layout.fillWidth: true; textFormat: Text.PlainText; text: "Approved providers: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.approved_providers : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            MutedText { objectName: "approvalConstraintsText"; Layout.fillWidth: true; textFormat: Text.PlainText; text: "Constraints: " + window.text(keeper.state.project && keeper.state.project.approvalCharter ? keeper.state.project.approvalCharter.constraints : "", "none"); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            BodyText { Layout.fillWidth: true; text: "A Project Charter is the project plan Keeper will follow after you approve it."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            MutedText { Layout.fillWidth: true; text: "For security, this approval request expires after 10 minutes. If it expires, your project and charter remain saved."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            MutedText { Layout.fillWidth: true; text: "If the approval expires, choose Authenticate & Approve again. Keeper will create a fresh approval request for the same unchanged charter, and you will still need to authenticate."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            MutedText { Layout.fillWidth: true; text: "After authentication, Keeper keeps the project moving inside the approved charter without asking you to manage tasks or workflows."; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap }
+            }
+        }
+        footer: Item {
+            implicitHeight: 60
+            RowLayout { anchors.centerIn: parent; QuietButton { text: "Cancel"; onClicked: charterDialog.close() } GoldButton { objectName: "confirmFounderApproval"; text: "Authenticate & Approve"; onClicked: { charterDialog.close(); keeper.approveCurrentCharter() } } }
         }
     }
 

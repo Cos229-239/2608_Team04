@@ -1086,6 +1086,21 @@ def test_qml_filters_provider_health_and_recovery_action_state() -> None:
     assert 'text: "Page " + (taskSafePage() + 1)' in qml
 
 
+def test_qml_explains_charter_approval_expiration_and_recovery() -> None:
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "A Project Charter is the project plan Keeper will follow "
+        "after you approve it."
+    ) in qml
+    assert "this approval request expires after 10 minutes" in qml
+    assert "your project and charter remain saved" in qml
+    assert "choose Authenticate & Approve again" in qml
+    assert "fresh approval request for the same unchanged charter" in qml
+
+
 def test_setup_finish_revalidates_protected_storage(
     tmp_path: Path,
 ) -> None:
