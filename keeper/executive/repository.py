@@ -553,11 +553,16 @@ class ExecutiveRepository:
         project_id: str,
         charter_id: str,
         charter_revision: int,
+        reuse_pending: bool = False,
     ) -> FounderApprovalChallenge:
-        """Create a one-use challenge for explicit local-Founder confirmation."""
-        requested = datetime.now(UTC)
+        """Create a one-use challenge, or atomically reuse a live renewal request.
+
+        Reuse is opt-in so explicit fresh-request callers keep their existing
+        semantics. It never extends expiration or grants authentication.
+        """
         with self.__store.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            requested = datetime.now(UTC)
             charter_payload, _ = self._entity_in_transaction(
                 connection, "project_charters", charter_id
             )
@@ -573,6 +578,37 @@ class ExecutiveRepository:
             self._require_no_newer_charter(
                 connection, project_id, charter_revision
             )
+            if reuse_pending:
+                matches: list[FounderApprovalChallenge] = []
+                rows = connection.execute(
+                    'SELECT id FROM "executive_founder_approval_challenges"'
+                ).fetchall()
+                for row in rows:
+                    payload, _ = self._entity_in_transaction(
+                        connection, "executive_founder_approval_challenges", row["id"]
+                    )
+                    candidate = FounderApprovalChallenge.from_dict(payload)
+                    if (
+                        candidate.project_id != project_id
+                        or candidate.charter_id != charter_id
+                        or candidate.charter_revision != charter_revision
+                        or candidate.approval_action != FounderApprovalIntent.APPROVE_CHARTER
+                        or candidate.state != "PENDING"
+                        or datetime.fromisoformat(candidate.expires_at) <= requested
+                    ):
+                        continue
+                    if (
+                        candidate.challenge_id != row["id"]
+                        or candidate.charter_digest != charter_approval_digest(charter)
+                        or candidate.consumed_event_id is not None
+                        or datetime.fromisoformat(candidate.requested_at) > requested
+                    ):
+                        raise PermissionError("pending Founder approval binding is invalid")
+                    matches.append(candidate)
+                if len(matches) > 1:
+                    raise PermissionError("multiple pending Founder approvals match the current charter")
+                if matches:
+                    return matches[0]
             challenge = FounderApprovalChallenge(
                 challenge_id=new_id("founder-challenge"),
                 schema_version=2,

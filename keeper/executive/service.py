@@ -199,9 +199,9 @@ class KeeperExecutive:
         )
 
     def request_charter_approval(
-        self, charter: ProjectCharter
+        self, charter: ProjectCharter, *, reuse_pending: bool = False
     ) -> FounderApprovalChallenge:
-        return self.__charters.request_approval(charter)
+        return self.__charters.request_approval(charter, reuse_pending=reuse_pending)
 
     def authenticate_founder(
         self, challenge: FounderApprovalChallenge

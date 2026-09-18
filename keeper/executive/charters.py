@@ -348,12 +348,13 @@ class CharterService:
         )
 
     def request_approval(
-        self, charter: ProjectCharter
+        self, charter: ProjectCharter, *, reuse_pending: bool = False
     ) -> FounderApprovalChallenge:
         return self.__repository.create_charter_approval_challenge(
             project_id=charter.project_id,
             charter_id=charter.charter_id,
             charter_revision=charter.revision,
+            reuse_pending=reuse_pending,
         )
 
     def confirm_approval(
