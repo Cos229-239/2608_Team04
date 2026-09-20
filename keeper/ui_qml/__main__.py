@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--diagnostics", action="store_true")
     parser.add_argument("--mock-demo", action="store_true")
     parser.add_argument("--ui-smoke", action="store_true")
+    parser.add_argument("--performance-check", action="store_true")
     parser.add_argument("--screenshot-dir", type=Path)
     parser.add_argument("--test-ui-fixture", action="store_true")
     options = parser.parse_args(arguments)
@@ -112,6 +114,12 @@ def main(arguments: list[str] | None = None) -> int:
         else options.data_dir
     )
     application = KeeperApplication(data_directory)
+    if options.performance_check:
+        started = time.perf_counter()
+        application.diagnostics()
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        print(json.dumps({"startup_ms": elapsed_ms, "source": "startup_check"}))
+        return 0
     if options.diagnostics:
         print(json.dumps(_public_diagnostics(application), indent=2))
         return 0

@@ -88,6 +88,30 @@ def test_qml_projection_is_primitive_and_redacts_evidence_path(
     assert _is_primitive(snapshot)
 
 
+def test_run_performance_check_records_startup_and_restart_ms(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequence = iter([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+
+    def fake_perf_counter() -> float:
+        return next(sequence)
+
+    class FakeCompletedProcess:
+        stdout = '{"startup_ms": 750.0}'
+
+    monkeypatch.setattr("time.perf_counter", fake_perf_counter)
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: FakeCompletedProcess())
+
+    result = controller.runPerformanceCheck()
+
+    assert result["startup_ms"] == 750.0
+    assert result["restart_ms"] == 750.0
+    assert result["source"] == "startup_and_restart"
+    assert result["status"] == "needs_attention"
+    assert "Performance check" in controller._get_status()
+
+
 def test_qml_projection_stringifies_only_integers_outside_signed_64_bit() -> None:
     maximum = 2**63 - 1
     minimum = -(2**63)

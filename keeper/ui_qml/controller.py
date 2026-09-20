@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
+import subprocess
+import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -255,6 +259,92 @@ class KeeperDesktopController(QObject):
         self._status, self._error = "Rebooting Keeper Desktop", ""
         self.statusChanged.emit()
         self.rebootRequested.emit()
+
+    @staticmethod
+    def _performance_check_command(data_directory: Path) -> list[str]:
+        return [
+            sys.executable,
+            "-m",
+            "keeper.ui_qml",
+            "--performance-check",
+            "--data-dir",
+            str(data_directory),
+        ]
+
+    @Slot(result="QVariantMap")
+    def runPerformanceCheck(self) -> dict[str, Any]:
+        threshold_ms = 2500.0
+        data_directory = (self.application.data_directory / "performance-check").resolve()
+        data_directory.mkdir(parents=True, exist_ok=True)
+
+        def measure(label: str) -> float:
+            start = time.perf_counter()
+            completed = subprocess.run(
+                self._performance_check_command(data_directory),
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            raw = completed.stdout.strip()
+            if raw:
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    payload = {}
+                if isinstance(payload, dict) and "startup_ms" in payload:
+                    elapsed_ms = float(payload["startup_ms"])
+            self._status = f"Performance check {label} complete"
+            self.statusChanged.emit()
+            return float(elapsed_ms)
+
+        startup_ms = measure("startup")
+        restart_ms = measure("restart")
+        result = {
+            "source": "startup_and_restart",
+            "startup_ms": round(startup_ms, 3),
+            "restart_ms": round(restart_ms, 3),
+            "threshold_ms": threshold_ms,
+            "status": "ok" if startup_ms <= threshold_ms and restart_ms <= threshold_ms else "needs_attention",
+        }
+        self.application.store.upsert("settings", "performance_check", result)
+        if result["status"] == "needs_attention":
+            self._status = (
+                "Performance check flagged slow startup/restart; Keeper is preparing a targeted optimization review."
+            )
+            self._error = (
+                f"Startup {startup_ms:.0f} ms and restart {restart_ms:.0f} ms exceed the recommended {threshold_ms:.0f} ms threshold."
+            )
+            self.statusChanged.emit()
+            self.sendAssistantMessage(
+                "Review the latest startup and restart measurements and propose only the smallest safe, local performance improvements. "
+                "Do not suggest broad refactors, unrelated feature work, or risky architecture changes. "
+                "Focus on startup and UI bootstrap cost only, preserve all security and durability guarantees, and explain exactly why each change should help. "
+                f"Current values: startup {startup_ms:.0f} ms, restart {restart_ms:.0f} ms."
+            )
+        else:
+            self._status = (
+                f"Performance check complete — startup {startup_ms:.0f} ms / restart {restart_ms:.0f} ms"
+            )
+            self._error = ""
+            self.statusChanged.emit()
+        self.operationFinished.emit(self._status, result["status"] == "ok")
+        return result
+
+    @Slot()
+    def requestPerformanceOptimization(self) -> None:
+        latest = self.application.store.get("settings", "performance_check") or {}
+        if not isinstance(latest, dict) or not latest:
+            self.runPerformanceCheck()
+            latest = self.application.store.get("settings", "performance_check") or {}
+        startup_ms = float(latest.get("startup_ms", 0.0) or 0.0)
+        restart_ms = float(latest.get("restart_ms", 0.0) or 0.0)
+        self.sendAssistantMessage(
+            "Act as a strict startup-performance reviewer. The latest data shows startup at "
+            f"{startup_ms:.0f} ms and restart at {restart_ms:.0f} ms. Suggest only the minimum safe, local changes that reduce startup and UI bootstrap cost without changing security boundaries, durable state handling, authorization, or provider behavior. "
+            "Keep the recommendations small, production-safe, and explain why each change matters."
+        )
 
     def _build_state(self) -> dict[str, Any]:
         snapshot = self.pass_b.product_snapshot()
@@ -677,17 +767,8 @@ class KeeperDesktopController(QObject):
                     project_id,
                     expected_charter_id=str(approval.get("charter_id")),
                     expected_charter_revision=int(approval.get("revision")),
-                founder_username=username,
-                founder_password=password,
-            ),
-        )
-
-    @Slot(str, str)
-    def configureFounderAccount(self, username: str, password: str) -> None:
-        self._run(
-            "Keeper Founder account configured",
-            lambda: self.pass_b.executive.configure_founder_account(
-                username.strip(), password
+                    founder_username=username,
+                    founder_password=password,
                 )
                 charter = outcome.get("charter", {})
                 mode = str(charter.get("delegation_mode", "ADVISORY")).upper()
@@ -726,6 +807,15 @@ class KeeperDesktopController(QObject):
             name="keeper-charter-approval",
             daemon=True,
         ).start()
+
+    @Slot(str, str)
+    def configureFounderAccount(self, username: str, password: str) -> None:
+        self._run(
+            "Keeper Founder account configured",
+            lambda: self.pass_b.executive.configure_founder_account(
+                username.strip(), password
+            ),
+        )
 
     @Slot()
     def runDelegatedCompletion(self) -> None:
@@ -1077,6 +1167,10 @@ class KeeperDesktopController(QObject):
         self.setupChanged.emit()
         if refresh:
             self.refresh()
+
+    def _refresh_state_only(self) -> None:
+        self._state = self._build_state()
+        self.stateChanged.emit()
 
     def _run(
         self,

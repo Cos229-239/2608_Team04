@@ -626,6 +626,8 @@ ApplicationWindow {
                         background: Rectangle { color: "#121414"; radius: 5; border.color: parent.activeFocus ? gold : "#3A3C3B" }
                     }
                     QuietButton { objectName: "refreshButton"; text: "Refresh"; enabled: !keeper.busy; onClicked: keeper.refresh() }
+                    QuietButton { objectName: "performanceCheckButton"; text: "Perf check"; ToolTip.text: "Measure startup and restart cost before and after a restart"; onClicked: keeper.runPerformanceCheck() }
+                    QuietButton { objectName: "performanceOptimizeButton"; text: "AI optimize"; ToolTip.text: "Ask Keeper to review the latest performance data and suggest safe improvements"; onClicked: keeper.requestPerformanceOptimization() }
                     QuietButton { objectName: "rebootButton"; text: "Reboot Desktop"; ToolTip.text: "Restart the desktop and reconcile durable state"; onClicked: rebootDialog.open() }
                     Rectangle { width: 1; height: 34; color: border }
                     ColumnLayout {
