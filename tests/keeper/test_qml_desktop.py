@@ -741,10 +741,13 @@ def test_local_paths_are_redacted_before_qml(
 def test_provider_path_requires_existing_file_and_never_registers(
     controller: KeeperDesktopController, tmp_path: Path
 ) -> None:
+    controller.setProviderPath("", "")
+    assert "provider name is required" in controller._get_error().lower()
+
     missing = tmp_path / "missing-provider.exe"
     controller.setProviderPath("offline", str(missing))
     assert controller.application.provider_paths() == {}
-    assert "existing file" in controller._get_error()
+    assert "verify the configured path" in controller._get_error().lower()
 
     executable = tmp_path / "offline-provider.exe"
     executable.write_bytes(b"offline")

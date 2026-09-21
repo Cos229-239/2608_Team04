@@ -965,16 +965,22 @@ class KeeperDesktopController(QObject):
     def setProviderPath(self, provider: str, path_value: str) -> None:
         provider_name = provider.strip().lower()
         if not provider_name:
-            self._fail("Enter a provider name before saving its executable path.")
+            self._fail(
+                "Provider name is required. Enter the provider name before saving its executable path."
+            )
             return
+
         candidate = self._local_path(path_value)
         if not candidate.is_file():
-            self._fail("Provider executable path must identify an existing file.")
+            self._fail(
+                "Provider executable was not found. Verify the configured path points to an existing provider executable, then try again."
+            )
             return
+
         paths = self.application.provider_paths()
         paths[provider_name] = str(candidate)
         self._run(
-            "Provider path saved; qualification is still required",
+            "Provider path saved. Complete provider qualification before attempting provider execution.",
             lambda: self.application.save_provider_paths(paths),
         )
 
