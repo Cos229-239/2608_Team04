@@ -38,3 +38,4 @@ Qt Quick/QML
 - Founder approval calls the existing production authentication path and binds the exact displayed charter ID and revision.
 - Unsupported actions are absent or visibly disabled with a stable reason.
 - KeeperAuthority health is read-only; the desktop cannot install, restart, or reconfigure the service.
+- Automatic desktop relaunch is unavailable until shutdown and single-instance ownership are safe. Close the desktop normally and wait for it to exit before reopening; never run two instances against one profile.

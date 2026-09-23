@@ -200,6 +200,125 @@ def test_production_chat_send_returns_before_durable_refresh_finishes(
     assert controller._get_status() == "Keeper replied"
 
 
+def test_conversation_draft_is_durable_and_clears_after_success(
+    controller: KeeperDesktopController,
+) -> None:
+    message = "Draft a Keeper reliability improvement."
+    controller.saveConversationDraft(message)
+
+    stored = controller.application.store.get("settings", "conversation_draft")
+    assert stored == {"message": message}
+    assert controller._get_conversation_draft() == message
+
+    controller.sendAssistantMessage("Hello Keeper, are you ready?", True)
+
+    assert controller._get_conversation_draft() == ""
+    assert controller.application.store.get("settings", "conversation_draft") is None
+
+
+def test_failed_conversation_preserves_the_saved_draft(
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = "Hello Keeper, are you ready?"
+    monkeypatch.setattr(
+        controller.pass_b,
+        "casual_conversation",
+        lambda project_id, text: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    controller.sendAssistantMessage(message)
+
+    assert controller._get_error() == "offline"
+    assert controller._get_conversation_draft() == message
+    assert controller.application.store.get("settings", "conversation_draft") == {
+        "message": message
+    }
+
+
+def test_shutdown_flush_saves_staged_text_without_waiting_for_timer(controller):
+    controller.stageConversationDraft("final edit before close")
+    assert controller.flushConversationDraft() is True
+    assert controller.application.store.get("settings", "conversation_draft") == {
+        "message": "final edit before close"
+    }
+
+
+def test_secondary_composer_preserves_main_editor_draft(controller):
+    controller.saveConversationDraft("main editor unsent text")
+    controller.sendAssistantMessage("hello keeper")
+    assert controller._get_conversation_draft() == "main editor unsent text"
+    assert controller.flushConversationDraft()
+    assert controller.application.store.get("settings", "conversation_draft")["message"] == "main editor unsent text"
+
+
+def test_accepted_message_cleanup_failure_still_finishes(controller, monkeypatch):
+    finished = []
+    controller.conversationFinished.connect(lambda *args: finished.append(args))
+    monkeypatch.setattr(controller.application.store, "delete", lambda *args: (_ for _ in ()).throw(OSError("disk unavailable")))
+    controller.sendAssistantMessage("hello keeper", True)
+    assert controller._get_busy() is False
+    assert finished == [("Message recorded; draft cleanup failed (do not resend)", True)]
+    assert "stale draft" in controller._get_error()
+
+
+def test_shutdown_flush_failure_keeps_draft_and_can_be_retried(controller, monkeypatch):
+    controller.stageConversationDraft("do not lose this")
+    original = controller.application.store.upsert
+    monkeypatch.setattr(controller.application.store, "upsert", lambda *args: (_ for _ in ()).throw(OSError("disk unavailable")))
+    assert controller.flushConversationDraft() is False
+    assert controller._get_conversation_draft() == "do not lose this"
+    assert "remains open" in controller._get_error()
+    monkeypatch.setattr(controller.application.store, "upsert", original)
+    assert controller.flushConversationDraft() is True
+    assert controller.application.store.get("settings", "conversation_draft")["message"] == "do not lose this"
+
+
+def test_refresh_failure_does_not_offer_to_resend_recorded_message(controller, monkeypatch):
+    finished = []
+    controller.conversationFinished.connect(lambda *args: finished.append(args))
+    original = controller._build_state
+    monkeypatch.setattr(controller, "_build_state", lambda: (_ for _ in ()).throw(RuntimeError("refresh offline")))
+    controller.sendAssistantMessage("hello keeper")
+    assert finished == [("Message recorded; refresh the view (do not resend)", True)]
+    assert controller._get_conversation_draft() == ""
+    monkeypatch.setattr(controller, "_build_state", original)
+    controller.refresh()
+    assert [item["body"] for item in controller.state_snapshot()["timeline"]].count("hello keeper") == 1
+
+
+def test_completion_preserves_a_newer_draft_before_debounce(controller):
+    controller.saveConversationDraft("submitted")
+    controller._submitted_draft_revision = controller._draft_revision
+    controller.stageConversationDraft("newer unsent message")
+    controller._finish_async({}, "done", "", True)
+    assert controller._get_conversation_draft() == "newer unsent message"
+    controller.saveConversationDraft(controller._get_conversation_draft())
+    assert controller.application.store.get("settings", "conversation_draft") == {
+        "message": "newer unsent message"
+    }
+
+
+def test_busy_send_does_not_replace_the_draft(controller):
+    controller.saveConversationDraft("keep me")
+    controller._busy = True
+    controller.sendAssistantMessage("ignored overlapping send")
+    assert controller._get_conversation_draft() == "keep me"
+
+
+def test_unrelated_operations_do_not_finish_a_conversation(controller):
+    finished = []
+    controller.conversationFinished.connect(lambda *args: finished.append(args))
+    controller.refresh()
+    controller._fail("Unrelated operation failed")
+    assert finished == []
+    controller.sendAssistantMessage("hello keeper")
+    assert finished == [("Keeper replied", True)]
+    qml = Path("keeper/ui_qml/qml/Main.qml").read_text(encoding="utf-8")
+    assert "function onConversationFinished(" in qml
+    assert "function onOperationFinished(" not in qml
+
+
 def test_primary_agent_selection_is_ready_only_and_durable(
     controller: KeeperDesktopController,
 ) -> None:
@@ -544,6 +663,25 @@ def test_delegated_charter_approval_starts_work_automatically(
     assert controller._get_error() == ""
 
 
+def test_failed_approval_and_refresh_never_claim_project_started(controller, monkeypatch):
+    controller._state = {"project": {"approvalCharter": {"charter_id": "c", "revision": 1}}}
+    monkeypatch.setattr(controller.pass_b, "selected_project_id", lambda: "p")
+    def reject(*args, **kwargs):
+        raise PermissionError("approval canceled")
+    def failed_refresh():
+        raise OSError("refresh unavailable")
+    monkeypatch.setattr(controller.pass_b, "approve_and_plan_current_charter", reject)
+    monkeypatch.setattr(controller, "_refresh_state_only", failed_refresh)
+    monkeypatch.setattr(
+        "keeper.ui_qml.controller.threading.Thread",
+        lambda *, target, **kwargs: SimpleNamespace(start=target),
+    )
+    controller.approveCurrentCharter()
+    assert not controller._get_busy()
+    assert controller._get_status() == "Charter approval status could not refresh; inspect before retrying"
+    assert "Project started" not in controller._get_status()
+
+
 def test_unknown_navigation_and_run_actions_fail_closed(
     controller: KeeperDesktopController,
 ) -> None:
@@ -562,6 +700,8 @@ def test_qml_has_no_sage_surface_and_disables_unsupported_authority() -> None:
     assert "Sage" not in qml
     assert 'actionText: "+ Register Provider"; actionEnabled: false' in qml
     assert 'actionText: "+ New Authorization"; actionEnabled: false' in qml
+    assert 'objectName: "rebootButton"' not in qml
+    assert 'objectName: "confirmReboot"' not in qml
     assert "Keeper Assistant" in qml
     assert "paid fallback is disabled" in qml
 
@@ -601,7 +741,7 @@ def test_qml_search_and_narrow_assistant_are_real_and_source_backed() -> None:
     assert "readonly property bool opened: userOpened" in qml
     assert 'keeper.navigate("Keeper")' in qml
     assert "keeper.startTask(modelData.id)" in qml
-    assert "keeper.runAction(modelData.run_id, \"resume\")" in qml
+    assert "keeper.runAction(modelData.run_id, modelData.recovery_action)" in qml
     assert "keeper.exportRunReport(window.selectedRunId, selectedFile)" in qml
     assert "Math.min(460, Math.max(120, emptyRoot.width - 24))" in qml
     assert 'objectName: "delegatedModeDialog"' in qml
@@ -692,6 +832,23 @@ def test_rendered_smoke_contract_covers_all_pages_at_wide_and_minimum() -> None:
     assert '("minimum", 1120, 700)' in source
     assert "for page in NAVIGATION" in source
     assert '"rendered_frames": captured_frames' in source
+
+
+def test_keeper_chat_shows_pending_work_and_preserves_failed_messages() -> None:
+    qml = (
+        Path(__file__).parents[2] / "keeper" / "ui_qml" / "qml" / "Main.qml"
+    ).read_text(encoding="utf-8")
+
+    assert 'property string pendingConversationText: ""' in qml
+    assert 'property string failedConversationText: ""' in qml
+    assert '"title": "Founder • Sending"' in qml
+    assert '"localState": "working"' in qml
+    assert "window.failedConversationText = window.pendingConversationText" in qml
+    assert 'text: "Edit & retry"' in qml
+    assert "keeper.sendAssistantMessage(outgoing, true)" in qml
+    assert "keeper.stageConversationDraft(outgoing)" in qml
+    assert "if (!keeper.flushConversationDraft())" in qml
+    assert "Ctrl+Enter to send" in qml
 
 def _is_primitive(value: object) -> bool:
     if value is None or isinstance(value, (str, int, float, bool)):

@@ -21,6 +21,29 @@ from keeper.ui_qml.composition import (
 from keeper.ui.view_models import ProductViewModel, build_product_view
 
 
+def _charter_summary(charter: dict[str, Any]) -> str:
+    """Display recorded scope, not invented defaults or approval authority."""
+    if not charter:
+        return "No charter recorded. Describe a project in Keeper to begin."
+    public = _public_record(charter)
+    fields = (
+        ("Recorded request", "problem_or_opportunity"),
+        ("Desired outcome", "desired_outcome"),
+        ("Deliverables", "deliverables"),
+        ("Success criteria", "success_criteria"),
+        ("Exclusions", "non_goals"),
+        ("Constraints", "constraints"),
+        ("Open questions", "unresolved_questions"),
+    )
+    lines = ["Recorded charter details — missing fields are not permission to act."]
+    for label, key in fields:
+        value = public.get(key)
+        if isinstance(value, (list, tuple)):
+            value = "; ".join(str(item) for item in value)
+        lines.append(f"{label}: {value or 'Not recorded'}")
+    return "\n\n".join(lines)
+
+
 NAVIGATION: tuple[str, ...] = (
     "Overview",
     "Keeper",
@@ -148,7 +171,9 @@ class KeeperDesktopController(QObject):
     busyChanged = Signal()
     statusChanged = Signal()
     setupChanged = Signal()
+    conversationDraftChanged = Signal()
     operationFinished = Signal(str, bool)
+    conversationFinished = Signal(str, bool)
     _asyncFinished = Signal(object, str, str, bool)
 
     def __init__(
@@ -167,6 +192,15 @@ class KeeperDesktopController(QObject):
         self._error = ""
         self._developer_details = False
         self._new_project_intake = False
+        stored_draft = self.application.store.get(
+            "settings", "conversation_draft"
+        )
+        self._conversation_draft = str(
+            (stored_draft or {}).get("message") or ""
+        )
+        self._persisted_conversation_draft = self._conversation_draft
+        self._draft_revision = 0
+        self._submitted_draft_revision = 0
         self._test_fixture = test_fixture
         self._setup = ProductSetupController(application)
         self._state: dict[str, Any] = {}
@@ -208,6 +242,13 @@ class KeeperDesktopController(QObject):
         return self._error
 
     error = Property(str, _get_error, notify=statusChanged)
+
+    def _get_conversation_draft(self) -> str:
+        return self._conversation_draft
+
+    conversationDraft = Property(
+        str, _get_conversation_draft, notify=conversationDraftChanged
+    )
 
     def _get_setup_required(self) -> bool:
         return not self.application.setup_complete()
@@ -341,9 +382,25 @@ class KeeperDesktopController(QObject):
                     }
                 )
             )
-        recoveries = [
-            _public_record(item) for item in self.application.recover_runs()
-        ]
+        recoveries = []
+        for item in self.application.recovery_records():
+            row = _public_record(item)
+            recovery = item.get("recovery")
+            recovery = recovery if isinstance(recovery, dict) else {}
+            uncertain = (
+                str(item.get("status", "")).upper() == "UNCERTAIN"
+                or str(recovery.get("classification", "")).lower() == "uncertain"
+            )
+            row.update({
+                "run_id": str(item.get("id", "")),
+                "status": "UNCERTAIN" if uncertain else str(item.get("status", "UNKNOWN")).upper(),
+                "recovery_action": "" if uncertain else item.get("recovery_action", ""),
+                "reason": "External outcome uncertain; retry is blocked." if uncertain
+                else "Paused worker can resume." if item.get("recovery_action") == "resume"
+                else "Interrupted stage can be explicitly retried." if item.get("recovery_action") == "retry"
+                else "Recovery requires inspection; no safe action is available.",
+            })
+            recoveries.append(row)
         uncertain_attempts = {
             item.assignment_id: item
             for item in self.pass_b.repository.list(AttemptRecord)
@@ -433,6 +490,7 @@ class KeeperDesktopController(QObject):
                 "cards": view.project_cards,
                 "catalog": view.project_catalog,
                 "charter": view.charter_detail,
+                "charterSummary": _charter_summary(view.charter_detail),
                 "approvalCharter": view.approval_charter_detail,
                 "approvalRequired": view.approval_required,
             },
@@ -485,12 +543,13 @@ class KeeperDesktopController(QObject):
                 "providers": len(view.provider_cards),
                 "evidence": len(view.evidence_cards) + len(view.evidence_reference_cards),
                 "uncertain": sum(
-                    1 for row in runs if str(row.get("status", "")).upper() == "UNCERTAIN"
-                ) + len(pass_b_uncertain),
+                    1 for row in recoveries if str(row.get("status", "")).upper() == "UNCERTAIN"
+                ),
                 "projectUncertain": sum(
                     1
-                    for row in runs
-                    if str(row.get("status", "")).upper() == "UNCERTAIN"
+                    for row in recoveries
+                    if row.get("run_id") in scoped_run_ids
+                    and str(row.get("status", "")).upper() == "UNCERTAIN"
                 )
                 + sum(
                     1
@@ -525,11 +584,20 @@ class KeeperDesktopController(QObject):
         )
 
     @Slot(str)
-    def sendAssistantMessage(self, message: str) -> None:
+    @Slot(str, bool)
+    def sendAssistantMessage(self, message: str, owns_draft: bool = False) -> None:
+        if self._busy:
+            return
         clean = message.strip()
         if not clean:
             self._fail("Describe the project or ask Keeper a question first.")
             return
+        # Secondary composers must not replace text owned by the main editor.
+        if owns_draft or not self._conversation_draft:
+            self.saveConversationDraft(clean)
+            self._submitted_draft_revision = self._draft_revision
+        else:
+            self._submitted_draft_revision = -1
         project_id = self.pass_b.selected_project_id()
 
         if re.search(
@@ -604,6 +672,43 @@ class KeeperDesktopController(QObject):
         )
 
     @Slot(str)
+    def stageConversationDraft(self, message: str) -> None:
+        if message == self._conversation_draft:
+            return
+        self._conversation_draft = message
+        self._draft_revision += 1
+        self.conversationDraftChanged.emit()
+
+    @Slot(str)
+    def saveConversationDraft(self, message: str) -> None:
+        self.stageConversationDraft(message)
+        if message == self._persisted_conversation_draft:
+            return
+        if message:
+            self.application.store.upsert(
+                "settings",
+                "conversation_draft",
+                {"message": message},
+            )
+        else:
+            self.application.store.delete("settings", "conversation_draft")
+        self._persisted_conversation_draft = message
+
+    def _clear_submitted_draft(self) -> None:
+        if self._draft_revision == self._submitted_draft_revision:
+            self.saveConversationDraft("")
+
+    @Slot(result=bool)
+    def flushConversationDraft(self) -> bool:
+        """Flush staged editor text before shutdown; never claim a failed save."""
+        try:
+            self.saveConversationDraft(self._conversation_draft)
+        except Exception:
+            self._fail("Draft could not be saved. Keeper remains open; copy your text before closing.")
+            return False
+        return True
+
+    @Slot(str)
     def selectConversationProvider(self, provider_id: str) -> None:
         selected = provider_id.strip().lower()
         available = {
@@ -673,7 +778,7 @@ class KeeperDesktopController(QObject):
             try:
                 self._refresh_state_only()
             except Exception as refresh_error:
-                self._status = "Project started, but the screen could not refresh"
+                self._status = "Charter approval status could not refresh; inspect before retrying"
                 self._error = _safe_error_message(refresh_error)
                 success = False
                 self.statusChanged.emit()
@@ -1071,9 +1176,6 @@ class KeeperDesktopController(QObject):
         success: str,
         operation: Callable[[], object],
     ) -> None:
-        if self._test_fixture:
-            self._run(success, operation)
-            return
         if self._busy:
             return
         self._busy = True
@@ -1081,19 +1183,35 @@ class KeeperDesktopController(QObject):
         self.busyChanged.emit()
         self.statusChanged.emit()
 
-        def worker() -> None:
+        def execute() -> tuple[object, str, str, bool]:
             try:
                 operation()
-                state = self._build_state()
             except Exception as error:
-                self._asyncFinished.emit(
+                return (
                     None,
                     "Action could not be completed",
                     _safe_error_message(error),
                     False,
                 )
-                return
-            self._asyncFinished.emit(state, success, "", True)
+            # The durable operation has returned successfully. A projection
+            # failure must never turn that accepted message into a retry.
+            try:
+                state = self._build_state()
+            except Exception:
+                return (
+                    None,
+                    "Message recorded; refresh the view (do not resend)",
+                    "The message was recorded, but the view could not refresh.",
+                    True,
+                )
+            return state, success, "", True
+
+        if self._test_fixture:
+            self._finish_async(*execute())
+            return
+
+        def worker() -> None:
+            self._asyncFinished.emit(*execute())
 
         threading.Thread(
             target=worker,
@@ -1112,11 +1230,18 @@ class KeeperDesktopController(QObject):
         if isinstance(state, dict):
             self._state = state
             self.stateChanged.emit()
+        if success:
+            try:
+                self._clear_submitted_draft()
+            except Exception:
+                status = "Message recorded; draft cleanup failed (do not resend)"
+                error = "The message was recorded. A stale draft may remain on disk; do not resend it."
         self._busy = False
         self._status, self._error = status, error
         self.busyChanged.emit()
         self.statusChanged.emit()
         self.operationFinished.emit(status if success else error, success)
+        self.conversationFinished.emit(status if success else error, success)
 
     def _fail(self, message: str) -> None:
         safe_message = _safe_error_message(message)

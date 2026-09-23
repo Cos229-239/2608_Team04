@@ -211,12 +211,22 @@ class ConversationIntake:
         for marker, value in markers.items():
             if marker in lower:
                 values.append(value)
+        # Preserve explicit negative clauses verbatim as constraints. A combined
+        # prohibition must not disappear just because no canonical marker matches.
+        for match in re.finditer(
+            r"\b(?:do not|don't|never)\s+.+?(?=[.!?](?:\s|$)|$)",
+            text,
+            re.IGNORECASE,
+        ):
+            clause = match.group(0).strip()
+            if clause and clause not in values:
+                values.append(clause)
         return tuple(values)
 
     @staticmethod
     def _success_criteria(text: str) -> tuple[str, ...]:
         match = re.search(
-            r"success criteria\s*(?:are|:)\s*(.+?)(?:\.\s|$)",
+            r"\bsuccess(?:\s+criteria)?\s*(?:are\b|is\b|:)\s*(.+?)(?:\.\s|$)",
             text,
             re.IGNORECASE,
         )

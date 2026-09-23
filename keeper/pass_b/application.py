@@ -750,6 +750,7 @@ class PassBApplication:
                 "expected charter identity must include ID and revision"
             )
 
+
         if expected_charter_id is not None and (
             context.charter_id != expected_charter_id
             or context.charter_revision != expected_charter_revision
@@ -758,7 +759,9 @@ class PassBApplication:
                 "displayed charter is not the current approval target"
             )
 
+
         status = self.project_status(project_id)
+
 
         durable_charters = [
             item
@@ -775,28 +778,38 @@ class PassBApplication:
             and item.get("founder_authorization_capability_digest")
         ]
 
+
         if durable_charters:
             charter = ProjectCharter.from_dict(durable_charters[0])
+
 
             if charter.status == "APPROVED":
                 _, charter = _activate_and_reload_charter(
                     self.executive,
                     self.project_status,
                     charter,
+                    self.executive,
+                    self.project_status,
+                    charter,
                 )
+
 
             if context.state != "APPROVED":
                 self.conversation.record_approval(charter)
 
+
         elif context.state == "APPROVED":
             raise PermissionError("active charter is unavailable")
+
 
         else:
             if context.state == "PROPOSED":
                 challenge = self.conversation.request_approval(project_id)
 
+
             elif context.state == "APPROVAL_REQUESTED":
                 status = self.project_status(project_id)
+
 
                 pending = [
                     item
@@ -809,7 +822,10 @@ class PassBApplication:
                 ]
 
                 if len(pending) > 1:
+
+                if len(pending) > 1:
                     raise PermissionError(
+                        "multiple pending Founder approvals match the current charter"
                         "multiple pending Founder approvals match the current charter"
                     )
 
@@ -845,6 +861,7 @@ class PassBApplication:
                     "current charter is not available for approval"
                 )
 
+
             if expected_charter_id is not None and (
                 challenge.project_id != project_id
                 or challenge.charter_id != expected_charter_id
@@ -855,22 +872,32 @@ class PassBApplication:
                     "Founder challenge does not match the displayed charter"
                 )
 
+
             confirmation = self.executive.authenticate_founder(challenge)
+
 
             charter, approval, event = (
                 self.executive.confirm_charter_approval(
                     challenge.challenge_id,
                     confirmation,
+                    challenge.challenge_id,
+                    confirmation,
                 )
             )
+
 
             project, charter = _activate_and_reload_charter(
                 self.executive,
                 self.project_status,
                 charter,
+                self.executive,
+                self.project_status,
+                charter,
             )
 
+
             self.conversation.record_approval(charter)
+
 
             if (
                 approval.project_id != project.project_id
@@ -879,8 +906,12 @@ class PassBApplication:
                 raise RuntimeError(
                     "Founder approval activation binding failed"
                 )
+                raise RuntimeError(
+                    "Founder approval activation binding failed"
+                )
 
         blueprint = DynamicWorkflowDesigner().design(charter)
+
 
         workflow, work_items = self.orchestration.create_workflow_plan(
             blueprint,
@@ -889,7 +920,9 @@ class PassBApplication:
             ),
         )
 
+
         self.select_project(project_id)
+
 
         return {
             "project_id": project_id,
