@@ -822,8 +822,6 @@ class PassBApplication:
                 ]
 
                 if len(pending) > 1:
-
-                if len(pending) > 1:
                     raise PermissionError(
                         "multiple pending Founder approvals match the current charter"
                         "multiple pending Founder approvals match the current charter"
@@ -853,8 +851,8 @@ class PassBApplication:
                         )
 
                     challenge = self.executive.request_charter_approval(
-                        ProjectCharter.from_dict(proposed[0])
-                    )
+                        ProjectCharter.from_dict(proposed[0]), reuse_pending=True
+                        )
 
             else:
                 raise PermissionError(
