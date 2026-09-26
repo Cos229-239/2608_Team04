@@ -1324,6 +1324,24 @@ ApplicationWindow {
                         ColumnLayout {
                             id: settingsColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
                             PageHeader { title: "Settings"; subtitle: "Local paths, presentation, environment labeling, and read-only service health." }
+                            KPanel {
+                                objectName: "refreshPerformancePanel"
+                                Layout.fillWidth: true; Layout.preferredHeight: 235
+                                SectionTitle { text: "LOCAL REFRESH TIMING" }
+                                BodyText {
+                                    objectName: "refreshPerformanceSummary"
+                                    Layout.fillWidth: true
+                                    text: keeper.performance.sampleCount > 0
+                                        ? "Last snapshot: " + keeper.performance.lastMilliseconds + " ms (" + (keeper.performance.lastSucceeded ? "completed" : "failed") + ")"
+                                        : "No refresh samples in this session."
+                                }
+                                MutedText { Layout.fillWidth: true; text: "Successful average: " + window.text(keeper.performance.averageMilliseconds, "not measured") + " ms | Maximum: " + window.text(keeper.performance.maximumMilliseconds, "not measured") + " ms | Samples: " + keeper.performance.sampleCount + " / 32" }
+                                MutedText { Layout.fillWidth: true; text: "Measures the initial snapshot and manual Refresh only, not full startup, restart, or provider speed. Timings stay in memory; no automatic AI request or optimization is performed." }
+                                RowLayout {
+                                    QuietButton { objectName: "measureRefreshButton"; text: "Refresh & measure"; enabled: !keeper.busy; onClicked: keeper.refresh() }
+                                    QuietButton { objectName: "clearRefreshTimingButton"; text: "Clear timings"; onClicked: keeper.clearPerformanceSamples() }
+                                }
+                            }
                             KPanel { Layout.fillWidth: true; Layout.preferredHeight: 240; SectionTitle { text: "SAFETY & PRESENTATION" }
                                 RowLayout { Layout.fillWidth: true; ColumnLayout { Layout.fillWidth: true; BodyText { text: "Local-only mode" } MutedText { text: "No provider is selected automatically and paid fallback is disabled." } } Switch { checked: true; enabled: false } }
                                 RowLayout { Layout.fillWidth: true; ColumnLayout { Layout.fillWidth: true; BodyText { text: "Show developer details" } MutedText { text: "Expose durable IDs and diagnostics; protected paths remain redacted." } } Switch { checked: keeper.state.settings ? keeper.state.settings.developerDetails : false; onToggled: keeper.setDeveloperDetails(checked) } }

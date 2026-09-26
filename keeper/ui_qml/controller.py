@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import re
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -174,6 +175,7 @@ class KeeperDesktopController(QObject):
     conversationDraftChanged = Signal()
     operationFinished = Signal(str, bool)
     conversationFinished = Signal(str, bool)
+    performanceChanged = Signal()
     _asyncFinished = Signal(object, str, str, bool)
 
     def __init__(
@@ -204,6 +206,7 @@ class KeeperDesktopController(QObject):
         self._test_fixture = test_fixture
         self._setup = ProductSetupController(application)
         self._state: dict[str, Any] = {}
+        self._refresh_samples: list[dict[str, Any]] = []
         self._asyncFinished.connect(self._finish_async)
         self.refresh()
 
@@ -214,6 +217,25 @@ class KeeperDesktopController(QObject):
         return self._state
 
     state = Property(dict, _get_state, notify=stateChanged)
+
+    def _get_performance(self) -> dict[str, Any]:
+        samples = self._refresh_samples
+        completed = [item["milliseconds"] for item in samples if item["succeeded"]]
+        return {
+            "sampleCount": len(samples),
+            "completedCount": len(completed),
+            "lastMilliseconds": samples[-1]["milliseconds"] if samples else None,
+            "lastSucceeded": samples[-1]["succeeded"] if samples else None,
+            "averageMilliseconds": round(sum(completed) / len(completed), 2) if completed else None,
+            "maximumMilliseconds": max(completed) if completed else None,
+        }
+
+    performance = Property(dict, _get_performance, notify=performanceChanged)
+
+    @Slot()
+    def clearPerformanceSamples(self) -> None:
+        self._refresh_samples.clear()
+        self.performanceChanged.emit()
 
     def _get_current_page(self) -> str:
         return self._current_page
@@ -275,7 +297,23 @@ class KeeperDesktopController(QObject):
 
     @Slot()
     def refresh(self) -> None:
-        self._run("Durable state refreshed", self._build_state, result_to_state=True)
+        self._run("Durable state refreshed", self._measure_refresh, result_to_state=True)
+
+    def _measure_refresh(self) -> dict[str, Any]:
+        """Time one existing snapshot refresh; never trigger extra provider work."""
+        started = time.perf_counter()
+        succeeded = False
+        try:
+            result = self._build_state()
+            succeeded = True
+            return result
+        finally:
+            self._refresh_samples.append({
+                "milliseconds": round(max(0.0, time.perf_counter() - started) * 1000, 2),
+                "succeeded": succeeded,
+            })
+            del self._refresh_samples[:-32]
+            self.performanceChanged.emit()
 
     def _refresh_state_only(self) -> None:
         """Refresh presentation data without replacing useful operation feedback."""
