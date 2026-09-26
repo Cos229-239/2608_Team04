@@ -138,6 +138,7 @@ class PassBApplication:
         )
         self.executive = executive or KeeperExecutive(self.store.path)
         self.authority_client = authority_client
+        self.startup_provider_block = ""
         self.authority_health_client = (
             authority_health_client or authority_client
         )
@@ -1050,6 +1051,13 @@ class PassBApplication:
     def _authority_health(self) -> dict[str, Any]:
         client = self.authority_health_client
         checked_at = _now()
+        if self.startup_provider_block:
+            return {
+                "state": "UNAVAILABLE",
+                "composition": "PRODUCTION_HEALTH_ONLY",
+                "last_checked_at": checked_at,
+                "error": self.startup_provider_block,
+            }
         if client is None:
             if self._test_authority_configured:
                 return {

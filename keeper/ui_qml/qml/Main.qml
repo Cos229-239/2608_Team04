@@ -659,7 +659,7 @@ ApplicationWindow {
                         visible: window.width >= 1430
                         spacing: 22
                         TrustItem { label: "FOUNDER FIRST"; detail: "Explicit authority" }
-                        TrustItem { label: "AUTHORITY READY"; detail: "Every action verified" }
+                        TrustItem { objectName: "authorityTrustStatus"; label: "AUTHORITY " + window.text(keeper.state.diagnostics ? keeper.state.diagnostics.authorityStatus : "", "UNAVAILABLE").toUpperCase(); detail: "Health is not execution approval" }
                         TrustItem { label: "AUDIT & RECEIPTS"; detail: "Nothing hidden" }
                     }
                     Rectangle { visible: window.width >= 1430; Layout.preferredWidth: 1; Layout.preferredHeight: 34; color: border }
@@ -687,6 +687,17 @@ ApplicationWindow {
                 }
             }
 
+            Text {
+                objectName: "startupProviderBlock"
+                Layout.fillWidth: true
+                Layout.leftMargin: 24
+                Layout.rightMargin: 24
+                visible: !!keeper.state.startupProviderBlock
+                text: keeper.state.startupProviderBlock || ""
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                color: window.warning
+            }
             Text {
                 objectName: "searchFeedback"
                 Layout.fillWidth: true
@@ -1234,7 +1245,7 @@ ApplicationWindow {
                             MutedText { text: "Provider registration and qualification remain explicit KeeperAuthority operations; this desktop does not fabricate production authority."; color: warning }
                             RowLayout {
                                 Layout.fillWidth: true
-                                BodyText { text: "Session health"; font.weight: Font.DemiBold }
+                                BodyText { text: "Session availability"; font.weight: Font.DemiBold }
                                 ComboBox {
                                     objectName: "providerHealthFilter"
                                     model: ["ALL", "READY", "NOT READY"]

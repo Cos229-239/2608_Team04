@@ -440,13 +440,20 @@ class KeeperDesktopController(QObject):
         recoveries.extend(pass_b_uncertain)
         settings = self.application.store.get("settings", "application") or {}
         routing = self.application.store.get("settings", "routing") or {}
+        # A recorded qualified session is not launch authority in this process.
+        # Keep the source records intact and distinguish current availability.
+        provider_cards = [dict(item) for item in view.provider_cards]
+        if self.pass_b.startup_provider_block:
+            for item in provider_cards:
+                item["recorded_health"] = item.get("health", "UNAVAILABLE")
+                item["health"] = "BLOCKED"
         conversation_providers = [
             {
                 "provider_id": str(item.get("provider_id", "")),
                 "name": str(item.get("name") or item.get("provider_id") or ""),
                 "health": str(item.get("health", "UNAVAILABLE")),
             }
-            for item in view.provider_cards
+            for item in provider_cards
             if (
                 str(item.get("health", "")).upper() == "READY"
                 and str(item.get("composition", "")).upper() != "MOCK"
@@ -470,6 +477,7 @@ class KeeperDesktopController(QObject):
                 )
             )
         state = {
+            "startupProviderBlock": self.pass_b.startup_provider_block,
             "navigation": list(NAVIGATION),
             "environment": (
                 "TEST UI FIXTURE"
@@ -496,7 +504,7 @@ class KeeperDesktopController(QObject):
             },
             "timeline": view.timeline,
             "workflows": view.workflow_rows,
-            "providers": view.provider_cards,
+            "providers": provider_cards,
             "providerHost": view.provider_host,
             "usage": view.usage_cards,
             "evidence": view.evidence_cards,
