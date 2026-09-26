@@ -1078,16 +1078,44 @@ class KeeperDesktopController(QObject):
     def setProviderPath(self, provider: str, path_value: str) -> None:
         provider_name = provider.strip().lower()
         if not provider_name:
-            self._fail("Enter a provider name before saving its executable path.")
+            self._fail(
+                "Provider name is required. Enter the provider name before saving its executable path."
+            )
             return
-        candidate = self._local_path(path_value)
-        if not candidate.is_file():
-            self._fail("Provider executable path must identify an existing file.")
+
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", provider_name):
+            self._fail("Use a provider name with letters, numbers, hyphens, or underscores; start with a letter.")
             return
+        raw_path = path_value.strip()
+        url = QUrl(raw_path)
+        decoded_path = url.toLocalFile() if url.isLocalFile() else raw_path
+        windows_path = bool(re.match(r"^[A-Za-z]:[\\/]", raw_path))
+        if (
+            not raw_path
+            or "\x00" in raw_path
+            or raw_path.startswith(("\\\\", "//"))
+            or decoded_path.replace("\\", "/").startswith("//")
+            or (url.scheme() and not windows_path and not url.isLocalFile())
+            or (url.isLocalFile() and (url.host() or url.hasQuery() or url.hasFragment()))
+        ):
+            self._fail("Choose an existing local executable file, not a web or network address.")
+            return
+        try:
+            candidate = self._local_path(raw_path)
+            exists = candidate.is_file()
+        except (OSError, ValueError):
+            self._fail("Provider path could not be checked. Choose an accessible local executable file and try again.")
+            return
+        if not exists:
+            self._fail(
+                "Provider executable was not found. Verify the configured path points to an existing provider executable, then try again."
+            )
+            return
+
         paths = self.application.provider_paths()
         paths[provider_name] = str(candidate)
         self._run(
-            "Provider path saved; qualification is still required",
+            "Provider path saved. Complete provider qualification before attempting provider execution.",
             lambda: self.application.save_provider_paths(paths),
         )
 

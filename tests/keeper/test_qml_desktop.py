@@ -898,10 +898,13 @@ def test_local_paths_are_redacted_before_qml(
 def test_provider_path_requires_existing_file_and_never_registers(
     controller: KeeperDesktopController, tmp_path: Path
 ) -> None:
+    controller.setProviderPath("", "")
+    assert "provider name is required" in controller._get_error().lower()
+
     missing = tmp_path / "missing-provider.exe"
     controller.setProviderPath("offline", str(missing))
     assert controller.application.provider_paths() == {}
-    assert "existing file" in controller._get_error()
+    assert "verify the configured path" in controller._get_error().lower()
 
     executable = tmp_path / "offline-provider.exe"
     executable.write_bytes(b"offline")
@@ -1131,21 +1134,40 @@ def test_desktop_error_messages_redact_local_and_network_paths() -> None:
     assert "private share" not in network_message
 
 
+@pytest.mark.parametrize(
+    ("raw_error", "private_fragments"),
+    (
+        (
+            r"Provider failed at C:\Program Files\Founder Name\provider.exe",
+            ("Program Files", "Founder Name"),
+        ),
+        (
+            r"Provider failed at \\private-server\Founder\provider.exe",
+            ("private-server", "Founder"),
+        ),
+        (
+            "Provider failed at /home/founder/private/provider",
+            ("founder", "private/provider"),
+        ),
+    ),
+)
 def test_provider_diagnostics_error_is_redacted(
-    controller: KeeperDesktopController, monkeypatch: pytest.MonkeyPatch
+    controller: KeeperDesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_error: str,
+    private_fragments: tuple[str, ...],
 ) -> None:
     diagnostics = controller.application.diagnostics()
-    diagnostics["provider_diagnostics_error"] = (
-        r"Provider failed at C:\Program Files\Founder Name\provider.exe"
-    )
+    diagnostics["provider_diagnostics_error"] = raw_error
     monkeypatch.setattr(controller.application, "diagnostics", lambda: diagnostics)
 
     snapshot = controller._build_state()
 
     error = str(snapshot["diagnostics"]["providerError"])
-    assert "Program Files" not in error
-    assert "Founder Name" not in error
+    assert error.startswith("Provider failed at ")
     assert "[local path redacted]" in error
+    for fragment in private_fragments:
+        assert fragment not in error
 
 def test_free_form_durable_record_paths_are_redacted(
     controller: KeeperDesktopController,
