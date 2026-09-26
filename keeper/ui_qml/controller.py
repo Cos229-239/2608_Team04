@@ -1230,12 +1230,21 @@ class KeeperDesktopController(QObject):
         if result_to_state:
             self._state = dict(result) if isinstance(result, dict) else {}
             self.stateChanged.emit()
-        self._status, self._error = success, ""
-        self.statusChanged.emit()
-        if not result_to_state:
-            state = self._build_state()
+        else:
+            try:
+                state = self._build_state()
+            except Exception:
+                # The service call already returned successfully. Repeating it
+                # could duplicate a durable action; retain the last snapshot.
+                self._status = success + "; view refresh failed"
+                self._error = "The action completed. Do not repeat it; use Refresh to reload the view."
+                self.statusChanged.emit()
+                self.operationFinished.emit(self._status, True)
+                return
             self._state = state
             self.stateChanged.emit()
+        self._status, self._error = success, ""
+        self.statusChanged.emit()
         self.operationFinished.emit(success, True)
 
     def _run_conversation(
