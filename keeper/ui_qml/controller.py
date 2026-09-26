@@ -154,6 +154,7 @@ class KeeperDesktopController(QObject):
     setupChanged = Signal()
     conversationDraftChanged = Signal()
     operationFinished = Signal(str, bool)
+    _asyncFinished = Signal(object, str, str, bool)
     rebootRequested = Signal()
 
     def __init__(
