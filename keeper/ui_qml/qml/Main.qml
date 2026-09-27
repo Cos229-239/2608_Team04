@@ -35,6 +35,13 @@ ApplicationWindow {
     property bool taskSortAscending: true
     property int taskPage: 0
     readonly property int taskPageSize: 6
+    readonly property string taskScopeKey: JSON.stringify([keeper.state.project ? keeper.state.project.id : "", keeper.state.project ? keeper.state.project.charterRevision : ""])
+    readonly property int taskResultCount: taskFilteredRows().length
+    onTaskScopeKeyChanged: taskPage = 0
+    onTaskResultCountChanged: taskPage = taskSafePage()
+    onTaskStatusFilterChanged: taskPage = 0
+    onTaskSortKeyChanged: taskPage = 0
+    onTaskSortAscendingChanged: taskPage = 0
     property string findingSeverityFilter: "ALL"
     property string findingStatusFilter: "ALL"
     property string findingRepairFilter: "ALL"
@@ -268,7 +275,7 @@ ApplicationWindow {
         return Math.max(1, Math.ceil(taskFilteredRows().length / taskPageSize))
     }
     function taskSafePage() {
-        return Math.min(taskPage, taskPageCount() - 1)
+        return Math.max(0, Math.min(taskPage, taskPageCount() - 1))
     }
     function taskPageRows() {
         var source = taskFilteredRows()
@@ -1103,19 +1110,20 @@ ApplicationWindow {
                             id: taskColumn; width: parent.width - 48; x: 24; y: 24; spacing: 16
                             PageHeader { title: "Tasks"; subtitle: "Keeper creates these from your approved conversation. Manual task entry is an advanced fallback."; actionText: "Advanced: Add Task"; actionEnabled: (keeper.state.projects || []).length > 0; onAction: taskDialog.open() }
                             KPanel {
-                                Layout.fillWidth: true; Layout.preferredHeight: 520
+                                Layout.fillWidth: true; Layout.preferredHeight: Math.max(360, Math.min(620, window.height - 265))
                                 SectionTitle { text: "TASK QUEUE" }
                                 RowLayout { Layout.fillWidth: true
                                     BodyText { text: "Status" }
                                     ComboBox { id: taskStatusSelector; Layout.preferredWidth: 190; model: ["ALL", "INTAKE", "BACKLOG", "READY", "BUILDING", "SELF_VERIFYING", "INDEPENDENT_AUDIT", "REPAIRING", "FINAL_VERIFY", "APPROVED", "COMPLETED", "BLOCKED", "FAILED", "PAUSED", "CANCELLED"]; objectName: "taskStatusFilterSelector"; currentIndex: Math.max(0, model.indexOf(window.taskStatusFilter)); onActivated: { window.taskStatusFilter = currentText; window.taskPage = 0 } }
                                     BodyText { text: "Sort" }
-                                    ComboBox { id: taskSortSelector; Layout.preferredWidth: 170; textRole: "label"; valueRole: "key"; model: [{"label":"Title","key":"title"},{"label":"Status","key":"status"},{"label":"Target branch","key":"target_branch"}]; onActivated: { window.taskSortKey = currentValue; window.taskPage = 0 } }
+                                    ComboBox { id: taskSortSelector; objectName: "taskSortSelector"; Layout.preferredWidth: 170; textRole: "label"; valueRole: "key"; model: [{"label":"Title","key":"title"},{"label":"Status","key":"status"},{"label":"Target branch","key":"target_branch"}]; currentIndex: Math.max(0, model.findIndex(function(item) { return item.key === window.taskSortKey })); onActivated: { window.taskSortKey = currentValue; window.taskPage = 0 } }
                                     QuietButton { text: window.taskSortAscending ? "Ascending" : "Descending"; onClicked: window.taskSortAscending = !window.taskSortAscending }
                                     Item { Layout.fillWidth: true }
                                     MutedText { text: taskFilteredRows().length + " task(s)" }
                                 }
                                 ListView {
                                     Layout.fillWidth: true; Layout.fillHeight: true; model: taskPageRows(); clip: true
+                                    ScrollBar.vertical: ScrollBar {}
                                     delegate: Rectangle {
                                         width: ListView.view.width; height: 76; color: index % 2 ? "#141616" : "#101212"; border.color: "#292B2A"
                                         RowLayout {
@@ -1128,7 +1136,7 @@ ApplicationWindow {
                                     }
                                     EmptyState { anchors.fill: parent; visible: parent.count === 0; objectName: "emptyTasks"; sourceCount: (keeper.state.tasks || []).length; filterPage: "Tasks"; title: "No tasks queued"; detail: "Keeper creates tasks from approved workflows, or you may add a bounded task to a registered repository." }
                                 }
-                                RowLayout { Layout.fillWidth: true; Item { Layout.fillWidth: true } QuietButton { text: "Previous"; enabled: taskSafePage() > 0; onClicked: window.taskPage = taskSafePage() - 1 } MutedText { text: "Page " + (taskSafePage() + 1) + " of " + taskPageCount() } QuietButton { text: "Next"; enabled: taskSafePage() + 1 < taskPageCount(); onClicked: window.taskPage = taskSafePage() + 1 } }
+                                RowLayout { objectName: "taskPaginationControls"; Layout.fillWidth: true; Item { Layout.fillWidth: true } QuietButton { text: "Previous"; enabled: taskSafePage() > 0; onClicked: window.taskPage = taskSafePage() - 1 } MutedText { text: "Page " + (taskSafePage() + 1) + " of " + taskPageCount() } QuietButton { text: "Next"; enabled: taskSafePage() + 1 < taskPageCount(); onClicked: window.taskPage = taskSafePage() + 1 } }
                             }
                         }
                     }

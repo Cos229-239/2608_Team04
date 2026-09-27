@@ -62,9 +62,12 @@ from PySide6.QtCore import QObject, QUrl, QMetaObject
 from PySide6.QtGui import QGuiApplication, QFontDatabase, QFont
 from PySide6.QtQml import QQmlApplicationEngine
 from keeper.app.service import KeeperApplication
+import keeper.app.service as service_module
+from tests.keeper.authority_testkit import TestAuthorityClient
 from keeper.pass_b.application import PassBApplication
 from keeper.ui_qml.controller import KeeperDesktopController
 from tests.keeper.test_qml_desktop import _HealthClient
+service_module.authority_client_factory = TestAuthorityClient
 app = QGuiApplication([])
 font = Path('C:/Windows/Fonts/segoeui.ttf')
 if font.exists():
@@ -105,6 +108,6 @@ root.close()
 '''
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
         cwd=Path(__file__).resolve().parents[2],
-        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        env={**os.environ, "QT_QPA_PLATFORM": os.environ.get("KEEPER_QA_PLATFORM", "offscreen")},
         capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
