@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Basic as Basic
 import QtQuick.Layouts
 import QtQuick.Dialogs
 
@@ -321,7 +322,7 @@ ApplicationWindow {
         return warning
     }
 
-    component GoldButton: Button {
+component GoldButton: Basic.Button {
         id: control
         implicitHeight: 40
         leftPadding: 18; rightPadding: 18
@@ -335,33 +336,46 @@ ApplicationWindow {
         }
         background: Rectangle {
             radius: 5
-            color: control.enabled ? (control.down ? "#B88625" : gold) : "#292A29"
+            color: control.enabled ? (control.down ? "#B88625" : (control.hovered ? goldBright : gold)) : "#292A29"
             border.color: control.enabled ? goldBright : "#444444"
         }
         ToolTip.visible: hovered && ToolTip.text.length > 0
         ToolTip.delay: 350
     }
 
-    component QuietButton: Button {
-        id: control
-        implicitHeight: 38
-        leftPadding: 14; rightPadding: 14
-        font.pixelSize: 13
-        contentItem: Text {
-            text: control.text
-            color: control.enabled ? textPrimary : "#6D6D69"
-            font: control.font
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            radius: 5
-            color: control.down ? "#2A2925" : "#1B1D1D"
-            border.color: control.hovered ? goldDim : "#393B3A"
-        }
-        ToolTip.visible: hovered && ToolTip.text.length > 0
-        ToolTip.delay: 350
+component QuietButton: Basic.Button {
+    id: control
+    hoverEnabled: true
+    implicitHeight: 38
+    leftPadding: 14
+    rightPadding: 14
+    font.pixelSize: 13
+
+    contentItem: Text {
+        text: control.text
+        color: !control.enabled ? "#6D6D69"
+               : control.hovered ? "#090909"
+               : "#F4F1E9"
+        font: control.font
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
     }
+
+    background: Rectangle {
+        radius: 5
+
+        color: !control.enabled ? "#292A29"
+               : control.down ? "#B88625"
+               : control.hovered ? "#D6A63B"
+               : "#1B1D1D"
+
+        border.width: 1
+        border.color: control.hovered ? "#F0C45B" : "#393B3A"
+    }
+
+    ToolTip.visible: control.hovered && ToolTip.text.length > 0
+    ToolTip.delay: 350
+}
 
     component KPanel: Rectangle {
         default property alias content: body.data
